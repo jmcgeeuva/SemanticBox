@@ -47,8 +47,12 @@ def main():
     parser.add_argument('--log_time', default='')
     args = parser.parse_args()
     with open(args.config, 'r') as f:
-        config = yaml.load(f)
+        config = yaml.safe_load(f)
     working_dir = os.path.join('./exp', config['network']['type'], config['network']['arch'], config['data']['dataset'], args.log_time)
+    
+    torch.manual_seed(int(config['seed'])) #1737328734)
+    numpy.random.seed(int(config['seed'])) #1737328734)
+
     wandb.init(project=config['network']['type'],name='{}_{}_{}_{}'.format(args.log_time,config['network']['type'], config['network']['arch'], config['data']['dataset']))
     print('-' * 80)
     print(' ' * 20, "working dir: {}".format(working_dir))
@@ -83,9 +87,9 @@ def main():
     fusion_model = visual_prompt(config.network.sim_header,clip_state_dict,config.data.num_segments)
     model_text = TextCLIP(model)
     model_image = ImageCLIP(model)
-    model_text = torch.nn.DataParallel(model_text).cuda()
-    model_image = torch.nn.DataParallel(model_image).cuda()
-    fusion_model = torch.nn.DataParallel(fusion_model).cuda()
+    # model_text = torch.nn.DataParallel(model_text).cuda()
+    # model_image = torch.nn.DataParallel(model_image).cuda()
+    # fusion_model = torch.nn.DataParallel(fusion_model).cuda()
     wandb.watch(model)
     wandb.watch(fusion_model)
 
@@ -141,6 +145,8 @@ def main():
         prec1 = validate(start_epoch,val_loader, classes, device, model,fusion_model, config,num_text_aug)
         return
 
+    lambda_i = config['lambda']
+
     for k,v in model.named_parameters():
         print('{}: {}'.format(k, v.requires_grad))
     for epoch in range(start_epoch, config.solver.epochs):
@@ -176,7 +182,7 @@ def main():
             ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
             loss_imgs = loss_img(logits_per_image,ground_truth)
             loss_texts = loss_txt(logits_per_text,ground_truth)
-            total_loss = (loss_imgs + loss_texts)/2
+            total_loss = (lambda_i*loss_imgs + (1-lambda_i)*loss_texts)
             wandb.log({"train_total_loss": total_loss})
             wandb.log({"train_loss_imgs": loss_imgs})
             wandb.log({"train_loss_texts": loss_texts})

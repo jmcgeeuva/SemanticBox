@@ -18,7 +18,7 @@ import cv2
 import numbers
 import math
 import torch
-from RandAugment import RandAugment
+from randaugment import RandAugment
 
 class GroupTransform(object):
     def __init__(self, transform):
@@ -81,7 +81,7 @@ class Action_DATASETS(data.Dataset):
     def __init__(self, list_file, labels_file,
                  num_segments=1, new_length=1,
                  image_tmpl='img_{:05d}.jpg', transform=None,
-                 random_shift=True, test_mode=False, index_bias=1):
+                 random_shift=True, test_mode=False, index_bias=1, height=224, width=224):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -93,6 +93,8 @@ class Action_DATASETS(data.Dataset):
         self.loop=False
         self.index_bias = index_bias
         self.labels_file = labels_file
+        self.height = height
+        self.width = width
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -105,6 +107,18 @@ class Action_DATASETS(data.Dataset):
     def _load_image(self, directory, idx):
 
         return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
+    
+    def _load_teacher_box(self, annotation, idx):
+        teacher_box = self.annotation['frames'][frame]['teacher_box']
+        x0, y0, x1, y1 = teacher_box.round().int()
+
+        # Ensure the coordinates are within valid range
+        x0 = x0.clamp(0, self.width)
+        y0 = y0.clamp(0, self.height)
+        x1 = x1.clamp(0, self.width)
+        y1 = y1.clamp(0, self.height)
+        return teacher_box
+    
     @property
     def total_length(self):
         return self.num_segments * self.seg_length
@@ -125,8 +139,7 @@ class Action_DATASETS(data.Dataset):
                     record.num_frames) + self.index_bias
             offsets = np.concatenate((
                 np.arange(record.num_frames),
-                randint(record.num_frames,
-                        size=self.total_length - record.num_frames)))
+                randint(record.num_frames, size=self.total_length - record.num_frames)))
             return np.sort(offsets) + self.index_bias
         offsets = list()
         ticks = [i * record.num_frames // self.num_segments
@@ -142,17 +155,17 @@ class Action_DATASETS(data.Dataset):
 
     def _get_val_indices(self, record):
         if self.num_segments == 1:
-            return np.array([record.num_frames //2], dtype=np.int) + self.index_bias
+            return np.array([record.num_frames //2], dtype=int) + self.index_bias
         
         if record.num_frames <= self.total_length:
             if self.loop:
                 return np.mod(np.arange(self.total_length), record.num_frames) + self.index_bias
             return np.array([i * record.num_frames // self.total_length
-                             for i in range(self.total_length)], dtype=np.int) + self.index_bias
+                             for i in range(self.total_length)], dtype=int) + self.index_bias
         offset = (record.num_frames / self.num_segments - self.seg_length) / 2.0
         return np.array([i * record.num_frames / self.num_segments + offset + j
                          for i in range(self.num_segments)
-                         for j in range(self.seg_length)], dtype=np.int) + self.index_bias
+                         for j in range(self.seg_length)], dtype=int) + self.index_bias
 
     def __getitem__(self, index):
         record = self.video_list[index]
@@ -162,19 +175,60 @@ class Action_DATASETS(data.Dataset):
     def __call__(self, img_group):
         return [self.worker(img) for img in img_group]
 
+    def adjust_bb(self, boxes, target_width, target_height):
+        # Compute the center of each bounding box
+        x_center = (boxes[:, 0] + boxes[:, 2]) / 2
+        y_center = (boxes[:, 1] + boxes[:, 3]) / 2
+
+        # Compute half-width and half-height, handling odd dimensions
+        half_width_left = np.floor(target_width / 2)
+        half_width_right = np.ceil(target_width / 2)
+        half_height_top = np.floor(target_height / 2)
+        half_height_bottom = np.ceil(target_height / 2)
+
+        # Create new bounding box coordinates
+        new_x0 = x_center - half_width_left
+        new_y0 = y_center - half_height_top
+        new_x1 = x_center + half_width_right
+        new_y1 = y_center + half_height_bottom
+
+        # Stack the new coordinates into the final tensor
+        new_boxes = torch.stack([new_x0, new_y0, new_x1, new_y1], dim=1)
+        return new_boxes
+
 
     def get(self, record, indices):
         images = list()
+        bbs = list()
+        
+        with open(os.path.join(record.path, 'annotation.json')) as f:
+            annotation = json.load(f, object_pairs_hook=OrderedDict)
+
+        target_width = 0
+        target_height = 0
         for i, seg_ind in enumerate(indices):
             p = int(seg_ind)
             try:
                 seg_imgs = self._load_image(record.path, p)
+                bb = self._load_teacher_box(annotation, p)
             except OSError:
                 print('ERROR: Could not read image "{}"'.format(record.path))
                 print('invalid indices: {}'.format(indices))
                 raise
             images.extend(seg_imgs)
-        process_data = self.transform(images)
+            width = bb[2] - bb[0]
+            if width > target_width:
+                target_width = width
+            height = bb[3] - bb[0]
+            if height > target_height:
+                target_height = height
+            bbs.append(bb)
+
+        bbs = self.adjust_bb(tensor.stack(bbs))
+        cropped_images = images[:, y0:y1, x0:x1]
+        process_data = self.transform(cropped_images)
+
+        import pdb; pdb.set_trace()
         return process_data, record.label
 
     def __len__(self):
