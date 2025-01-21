@@ -19,6 +19,8 @@ import numbers
 import math
 import torch
 from randaugment import RandAugment
+import json
+from collections import OrderedDict
 
 class GroupTransform(object):
     def __init__(self, transform):
@@ -81,7 +83,9 @@ class Action_DATASETS(data.Dataset):
     def __init__(self, list_file, labels_file,
                  num_segments=1, new_length=1,
                  image_tmpl='img_{:05d}.jpg', transform=None,
-                 random_shift=True, test_mode=False, index_bias=1, height=224, width=224):
+                 random_shift=True, test_mode=False, index_bias=1, 
+                 height=224, width=224, label_box=False, debug=False,
+                 bounding_boxes=False):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -95,6 +99,9 @@ class Action_DATASETS(data.Dataset):
         self.labels_file = labels_file
         self.height = height
         self.width = width
+        self.label_box = label_box
+        self.debug = debug
+        self.bounding_boxes = bounding_boxes
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -109,15 +116,20 @@ class Action_DATASETS(data.Dataset):
         return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
     
     def _load_teacher_box(self, annotation, idx):
-        teacher_box = self.annotation['frames'][frame]['teacher_box']
-        x0, y0, x1, y1 = teacher_box.round().int()
+        box = []
+        if not self.label_box:
+            box = torch.tensor(annotation['frames'][str(idx)]['teacher_box'])
+        else:
+            box = torch.tensor(annotation['frames'][str(idx)]['label_box'])
+        
+        # x0, y0, x1, y1 = box.round().int()
 
-        # Ensure the coordinates are within valid range
-        x0 = x0.clamp(0, self.width)
-        y0 = y0.clamp(0, self.height)
-        x1 = x1.clamp(0, self.width)
-        y1 = y1.clamp(0, self.height)
-        return teacher_box
+        # # Ensure the coordinates are within valid range
+        # x0 = x0.clamp(0, self.width-1)
+        # y0 = y0.clamp(0, self.height-1)
+        # x1 = x1.clamp(0, self.width-1)
+        # y1 = y1.clamp(0, self.height-1)
+        return box
     
     @property
     def total_length(self):
@@ -194,7 +206,7 @@ class Action_DATASETS(data.Dataset):
 
         # Stack the new coordinates into the final tensor
         new_boxes = torch.stack([new_x0, new_y0, new_x1, new_y1], dim=1)
-        return new_boxes
+        return new_boxes, new_y1-new_y0, new_x1-new_x0
 
 
     def get(self, record, indices):
@@ -204,8 +216,6 @@ class Action_DATASETS(data.Dataset):
         with open(os.path.join(record.path, 'annotation.json')) as f:
             annotation = json.load(f, object_pairs_hook=OrderedDict)
 
-        target_width = 0
-        target_height = 0
         for i, seg_ind in enumerate(indices):
             p = int(seg_ind)
             try:
@@ -216,20 +226,28 @@ class Action_DATASETS(data.Dataset):
                 print('invalid indices: {}'.format(indices))
                 raise
             images.extend(seg_imgs)
-            width = bb[2] - bb[0]
-            if width > target_width:
-                target_width = width
-            height = bb[3] - bb[0]
-            if height > target_height:
-                target_height = height
             bbs.append(bb)
 
-        bbs = self.adjust_bb(tensor.stack(bbs))
-        cropped_images = images[:, y0:y1, x0:x1]
-        process_data = self.transform(cropped_images)
+        if self.bounding_boxes:
+            cropped_images = []
+            for i, (x0, y0, x1, y1) in enumerate(bbs):
+                cropped_images.append(
+                    images[i].crop((
+                        int(np.floor(x0)), 
+                        int(np.ceil (y0)), 
+                        int(np.floor(x1)), 
+                        int(np.ceil (y1))
+                    ))
+                )
 
-        import pdb; pdb.set_trace()
-        return process_data, record.label
+            process_data = self.transform(cropped_images)
+        else: 
+            process_data = self.transform(images)
+
+        if self.debug:
+            return process_data, record.label, (images, bbs)
+        else:
+            return process_data, record.label
 
     def __len__(self):
         return len(self.video_list)

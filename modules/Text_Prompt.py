@@ -5,12 +5,12 @@
 import torch
 import clip
 
-def text_prompt(data):
-    text_aug = [f"a photo of action {{}}", f"a picture of action {{}}", f"Human action of {{}}", f"{{}}, an action",
-                f"{{}} this is an action", f"{{}}, a video of action", f"Playing action of {{}}", f"{{}}",
-                f"Playing a kind of action, {{}}", f"Doing a kind of action, {{}}", f"Look, the human is {{}}",
-                f"Can you recognize the action of {{}}?", f"Video classification of {{}}", f"A video of {{}}",
-                f"The man is {{}}", f"The woman is {{}}"]
+def text_prompt(data, file_name='text_aug1.txt'):
+    text_aug = []
+    with open(file_name, 'r') as f:
+        for line in f:
+            text_aug.append(line.strip())
+
     text_dict = {}
     num_text_aug = len(text_aug)
 

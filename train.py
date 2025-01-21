@@ -73,7 +73,8 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 
     model, clip_state_dict = clip.load(config.network.arch,device=device,jit=False, tsm=config.network.tsm, T=config.data.num_segments,dropout=config.network.drop_out, emb_dropout=config.network.emb_dropout,pretrain=config.network.init, joint = config.network.joint) #Must set jit=False for training  ViT-B/32
-
+    if config.bounding_boxes:
+        model_bb, clip_state_dict_bb = clip.load(config.network.arch,device=device,jit=False, tsm=config.network.tsm, T=config.data.num_segments,dropout=config.network.drop_out, emb_dropout=config.network.emb_dropout,pretrain=config.network.init, joint = config.network.joint) #Must set jit=False for training  ViT-B/32
     transform_train = get_augmentation(True,config)
     transform_val = get_augmentation(False,config)
 
@@ -87,18 +88,52 @@ def main():
     fusion_model = visual_prompt(config.network.sim_header,clip_state_dict,config.data.num_segments)
     model_text = TextCLIP(model)
     model_image = ImageCLIP(model)
-    # model_text = torch.nn.DataParallel(model_text).cuda()
-    # model_image = torch.nn.DataParallel(model_image).cuda()
-    # fusion_model = torch.nn.DataParallel(fusion_model).cuda()
+    model_text = torch.nn.DataParallel(model_text).cuda()
+    model_image = torch.nn.DataParallel(model_image).cuda()
+    fusion_model = torch.nn.DataParallel(fusion_model).cuda()
     wandb.watch(model)
     wandb.watch(fusion_model)
+    
+    if config.bounding_boxes:
+        model_text_bb = TextCLIP(model_bb)
+        model_image_bb = ImageCLIP(model_bb)
+        fusion_model_bb = visual_prompt(config.network.sim_header,clip_state_dict_bb,config.data.num_segments)
+        model_text_bb = torch.nn.DataParallel(model_text_bb).cuda()
+        model_image_bb = torch.nn.DataParallel(model_image_bb).cuda()
+        fusion_model_bb = torch.nn.DataParallel(fusion_model_bb).cuda()
+        wandb.watch(model_bb)
+        wandb.watch(fusion_model_bb)
 
-    train_data = Action_DATASETS(config.data.train_list,config.data.label_list,num_segments=config.data.num_segments,image_tmpl=config.data.image_tmpl,random_shift=config.data.random_shift,
-                       transform=transform_train)
-    train_loader = DataLoader(train_data,batch_size=config.data.batch_size,num_workers=config.data.workers,shuffle=True,pin_memory=False,drop_last=True)
-    val_data = Action_DATASETS(config.data.val_list,config.data.label_list, random_shift=False,num_segments=config.data.num_segments,image_tmpl=config.data.image_tmpl,
-                       transform=transform_val)
-    val_loader = DataLoader(val_data,batch_size=config.data.batch_size,num_workers=config.data.workers,shuffle=False,pin_memory=False,drop_last=True)
+    train_data = Action_DATASETS(
+                    config.data.train_list,
+                    config.data.label_list,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    random_shift=config.data.random_shift,
+                    transform=transform_train,
+                    bounding_boxes=config.bounding_boxes)
+    train_loader = DataLoader(
+                    train_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=True,
+                    pin_memory=False,
+                    drop_last=True)
+    val_data = Action_DATASETS(
+                    config.data.val_list,
+                    config.data.label_list, 
+                    random_shift=False,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    transform=transform_val,
+                    bounding_boxes=config.bounding_boxes)
+    val_loader = DataLoader(
+                    val_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=False,
+                    pin_memory=False,
+                    drop_last=True)
 
     if device == "cpu":
         model_text.float()
@@ -135,7 +170,7 @@ def main():
         else:
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
-    classes, num_text_aug, text_dict = text_prompt(train_data)
+    classes, num_text_aug, text_dict = text_prompt(train_data, file_name=config.prompt)
 
     optimizer = _optimizer(config, model, fusion_model)
     lr_scheduler = _lr_scheduler(config, optimizer)
@@ -182,7 +217,7 @@ def main():
             ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
             loss_imgs = loss_img(logits_per_image,ground_truth)
             loss_texts = loss_txt(logits_per_text,ground_truth)
-            total_loss = (lambda_i*loss_imgs + (1-lambda_i)*loss_texts)
+            total_loss = (loss_imgs + loss_texts)/2
             wandb.log({"train_total_loss": total_loss})
             wandb.log({"train_loss_imgs": loss_imgs})
             wandb.log({"train_loss_texts": loss_texts})
