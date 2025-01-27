@@ -121,15 +121,29 @@ class Action_DATASETS(data.Dataset):
             box = torch.tensor(annotation['frames'][str(idx)]['teacher_box'])
         else:
             box = torch.tensor(annotation['frames'][str(idx)]['label_box'])
-        
-        # x0, y0, x1, y1 = box.round().int()
 
-        # # Ensure the coordinates are within valid range
-        # x0 = x0.clamp(0, self.width-1)
-        # y0 = y0.clamp(0, self.height-1)
-        # x1 = x1.clamp(0, self.width-1)
-        # y1 = y1.clamp(0, self.height-1)
         return box
+
+    def create_masks(self, mask_indices, height, width, channels=3):
+        if width < self.model_resolution:
+            toksX = 1
+        else:
+           toksX = width // self.model_resolution 
+
+        if height < self.model_resolution:
+            toksY = 1
+        else:
+            toksY = height // self.model_resolution
+        mask = self.set_mask_from_bb(mask_indices, height, width, channels=channels)
+
+        sideX, sideY = toksX * self.model_resolution, toksY * self.model_resolution
+        if sideX == 0:
+            sideX, sideY = self.model_resolution, self.model_resolution
+        # Resize masks to model resolution
+        mask = torch.nn.functional.interpolate(mask, (sideY, sideX))
+        mask = torch.round(mask)
+
+        return mask
     
     @property
     def total_length(self):

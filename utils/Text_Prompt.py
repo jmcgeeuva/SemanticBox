@@ -31,8 +31,12 @@ def text_prompt(data, file_name='text_aug1.txt'):
     num_text_aug = len(text_aug)
 
     text_dict = {}
-    for ii, txt in enumerate(text_aug):
-        text_dict[ii] = torch.cat([clip.tokenize(txt.format(c)) for i, c in data.classes])
+    if 'longest' in file_name:
+        for ii, txt in enumerate(text_aug):
+            text_dict[ii] = torch.cat([clip.tokenize(txt.format(c, c)) for i, c in data.classes])
+    else:
+        for ii, txt in enumerate(text_aug):
+            text_dict[ii] = torch.cat([clip.tokenize(txt.format(c)) for i, c in data.classes])
 
     classes = torch.cat([v for k, v in text_dict.items()])
 
