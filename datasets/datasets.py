@@ -21,6 +21,8 @@ import torch
 from randaugment import RandAugment
 import json
 from collections import OrderedDict
+from typing import Any, Callable, Optional, Tuple, Union
+from torchvision import transforms
 
 class GroupTransform(object):
     def __init__(self, transform):
@@ -80,18 +82,32 @@ class VideoRecord(object):
 
 
 class Action_DATASETS(data.Dataset):
-    def __init__(self, list_file, labels_file,
-                 num_segments=1, new_length=1,
-                 image_tmpl='img_{:05d}.jpg', transform=None,
-                 random_shift=True, test_mode=False, index_bias=1, 
-                 height=224, width=224, label_box=False, debug=False,
-                 bounding_boxes=False):
+    def __init__(self, 
+                 list_file: str, 
+                 labels_file: str,
+                 num_segments: int = 1, 
+                 new_length: int = 1,
+                 image_tmpl: str ='img_{:05d}.jpg', 
+                 image_transform: Optional[Callable] = None,
+                 bb_transform: Optional[Callable] = None,
+                 target_transform: Optional[Callable] = None,
+                 model_resolution: int = 224,
+                 random_shift: bool =True, 
+                 test_mode: bool=False, 
+                 index_bias: int=1, 
+                 height: int=224, 
+                 width: int=224, 
+                 expl_loss_weight: float = 0.15,
+                 expl_weight_according_to_mask_ratio: bool = True,
+                 label_box: bool=False, 
+                 debug: bool=False,
+                 bounding_boxes: bool=False):
 
         self.list_file = list_file
         self.num_segments = num_segments
         self.seg_length = new_length
         self.image_tmpl = image_tmpl
-        self.transform = transform
+        self.image_transform = image_transform
         self.random_shift = random_shift
         self.test_mode = test_mode
         self.loop=False
@@ -102,6 +118,9 @@ class Action_DATASETS(data.Dataset):
         self.label_box = label_box
         self.debug = debug
         self.bounding_boxes = bounding_boxes
+        self.model_resolution = model_resolution
+        self.expl_loss_weight = expl_loss_weight
+        self.expl_weight_according_to_mask_ratio = expl_weight_according_to_mask_ratio
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -111,6 +130,13 @@ class Action_DATASETS(data.Dataset):
         self._parse_list()
         self.initialized = False
 
+        self.target_transform = target_transform
+        self.bb_transform = bb_transform
+        if not self.bb_transform:
+            self.bb_transform = transforms.Compose([
+                transforms.Resize((224, 224))
+            ])
+
     def _load_image(self, directory, idx):
 
         return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
@@ -118,18 +144,38 @@ class Action_DATASETS(data.Dataset):
     def _load_teacher_box(self, annotation, idx):
         box = []
         if not self.label_box:
-            box = torch.tensor(annotation['frames'][str(idx)]['teacher_box'])
+            x1, y1, x2, y2 = torch.tensor(annotation['frames'][str(idx)]['teacher_box'])
+            x1 = int(torch.floor(x1))
+            y1 = int(torch.floor(y1))
+            x2 = int(torch.ceil(x2))
+            y2 = int(torch.ceil(y2))
         else:
-            box = torch.tensor(annotation['frames'][str(idx)]['label_box'])
+            x1, y1, x2, y2 = torch.tensor(annotation['frames'][str(idx)]['label_box'])
+            x1 = int(torch.floor(x1))
+            y1 = int(torch.floor(y1))
+            x2 = int(torch.ceil(x2))
+            y2 = int(torch.ceil(y2))
 
-        return box
+        return [x1, y1, x2, y2]
+
+
+    def set_mask_from_bb(self, mask_bb_indices, height, width, channels=3):
+        left, top, right, bottom = mask_bb_indices
+
+        mask_width = right - left
+        mask_height = bottom-top
+        
+        mask = torch.zeros((1, channels, height, width))
+        mask[:, :, top:top+mask_height, left:left+mask_width] = 1.
+
+        return mask
 
     def create_masks(self, mask_indices, height, width, channels=3):
         if width < self.model_resolution:
             toksX = 1
         else:
            toksX = width // self.model_resolution 
-
+           
         if height < self.model_resolution:
             toksY = 1
         else:
@@ -144,6 +190,14 @@ class Action_DATASETS(data.Dataset):
         mask = torch.round(mask)
 
         return mask
+
+    def create_lambdas(self, mask):
+        lambda_val = self.expl_loss_weight
+        if self.expl_weight_according_to_mask_ratio:
+            mask = mask.to(dtype=torch.float)
+            lambda_val = lambda_val * (1 / mask.mean().sqrt())
+        
+        return lambda_val
     
     @property
     def total_length(self):
@@ -225,7 +279,8 @@ class Action_DATASETS(data.Dataset):
 
     def get(self, record, indices):
         images = list()
-        bbs = list()
+        masks = list()
+        lambdas = list()
         
         with open(os.path.join(record.path, 'annotation.json')) as f:
             annotation = json.load(f, object_pairs_hook=OrderedDict)
@@ -234,34 +289,26 @@ class Action_DATASETS(data.Dataset):
             p = int(seg_ind)
             try:
                 seg_imgs = self._load_image(record.path, p)
+                width, height = seg_imgs[-1].size
+                channels = 3
                 bb = self._load_teacher_box(annotation, p)
+                mask = self.create_masks(bb, height, width, channels=channels)
+                lambda_val = self.create_lambdas(mask)
             except OSError:
                 print('ERROR: Could not read image "{}"'.format(record.path))
                 print('invalid indices: {}'.format(indices))
                 raise
             images.extend(seg_imgs)
-            bbs.append(bb)
+            masks.append(mask)
+            lambdas.append(lambda_val)
 
-        if self.bounding_boxes:
-            cropped_images = []
-            for i, (x0, y0, x1, y1) in enumerate(bbs):
-                cropped_images.append(
-                    images[i].crop((
-                        int(np.floor(x0)), 
-                        int(np.ceil (y0)), 
-                        int(np.floor(x1)), 
-                        int(np.ceil (y1))
-                    ))
-                )
+        if self.bb_transform:
+            mask = self.bb_transform(mask)
+            
+        if self.image_transform:
+            process_data = self.image_transform(images)
 
-            process_data = self.transform(cropped_images)
-        else: 
-            process_data = self.transform(images)
-
-        if self.debug:
-            return process_data, record.label, (images, bbs)
-        else:
-            return process_data, record.label
+        return process_data, torch.stack(masks), lambdas, record.label
 
     def __len__(self):
         return len(self.video_list)

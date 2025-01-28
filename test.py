@@ -47,7 +47,7 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
     with torch.no_grad():
         text_inputs = classes.to(device)
         text_features = model.encode_text(text_inputs)
-        for iii, (image, class_id) in enumerate(tqdm(val_loader)):
+        for iii, (image,mask, class_id) in enumerate(tqdm(val_loader)):
             image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
             b, t, c, h, w = image.size()
             class_id = class_id.to(device)
