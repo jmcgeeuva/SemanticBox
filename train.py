@@ -4,7 +4,7 @@
 
 import os
 import torch.nn as nn
-from datasets import Action_DATASETS
+from datasets import Action_DATASETS, Action_DATASETS_orig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
@@ -23,11 +23,13 @@ from utils.tools import *
 from utils.Text_Prompt import *
 from utils.saving import  *
 import sys
-sys.path.insert(0, "./../ml-no-token-left-behind/explain/mlexternal/tamingtransformers")
-sys.path.append("./../ml-no-token-left-behind/external/TransformerMMExplainability")
+sys.path.insert(0, "../explain/ml-no-token-left-behind/external/tamingtransformers/")
+sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
 from prompt import PromptLoss
 from helpers import ReplaceGrad
 from augmentation import get_mask_augmentation
+
+import torch
 
 class TextCLIP(nn.Module):
     def __init__(self, model) :
@@ -78,21 +80,27 @@ def train_classifier(start_epoch,
         model_text.train()
         fusion_model.train()
 
-        correct, total = 0, 0
-        running_loss = 0
-        for kkk,(videos, masks, list_id) in enumerate(tqdm(train_loader)):
+        running_loss_all = 0
+        running_kl = 0
+
+        for kkk,data in enumerate(tqdm(train_loader)):
             if config.solver.type != 'monitor':
                 if (kkk+1) == 1 or (kkk+1) % 10 == 0:
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
-
+            if len(data) > 2:
+                videos, masks, list_id = data
+                if masks:
+                    aug_masks, lambdas = masks
+                    aug_masks = aug_masks.to(device)
+                    lambdas = lambdas.to(device)
+            else:
+                videos, list_id = data
+                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
             
             b,t,c,h,w = videos.size()
             
-            aug_masks, lambdas = masks
-            aug_masks = aug_masks.to(device)
-            lambdas = lambdas.to(device)
             text_id = numpy.random.randint(num_text_aug,size=len(list_id))
             texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
 
@@ -115,11 +123,14 @@ def train_classifier(start_epoch,
             loss_imgs = loss_img(logits_per_image,ground_truth)
             loss_texts = loss_txt(logits_per_text,ground_truth)
 
+            # print(dir(perceptor.visual.transformer.resblocks[0].attn))
+            # print(dir(perceptor.visual.transformer.resblocks[0]))
+            # raise ValueError("test")
             ############## Calculate explainability loss between attn and mask ###########
             # run through the prompt model and get the new results from the prompts
             lossAll = []
             per_frame = True
-            if len(criterion_list) > 0 and False:
+            if len(criterion_list) > 0:
                 # for each label in the list and for each invidividual video (there are 16 of them)
                 for idx, label in enumerate(list_id.detach().cpu()):
                     # find the loss for this specific bounding box
@@ -134,13 +145,15 @@ def train_classifier(start_epoch,
                             res = crit(curr_image, curr_mask, curr_lambda)
                             subloss.append(res)
                         lossAll.append(sum(subloss)/len(subloss))
-                    else:
+                    else: # untested
                         res = crit(videos[8*idx:8*(idx+1)].unsqueeze(0), aug_masks[idx], lambdas[idx])
                         lossAll.append(res)
 
-            
-            total_loss = ((loss_imgs + loss_texts)/2) #+ .3*(-1*(sum(lossAll)/len(lossAll)))
-            running_loss += total_loss.item()
+            kl_loss = (loss_imgs + loss_texts)/2
+            loss_all = (sum(lossAll)/len(lossAll))
+            total_loss = .7*(kl_loss) + .3*(loss_all)
+            running_kl += kl_loss.item()
+            running_loss_all += loss_all.item()
 
             wandb.log({"train_total_loss": total_loss})
             wandb.log({"train_loss_imgs": loss_imgs})
@@ -160,7 +173,7 @@ def train_classifier(start_epoch,
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
-        print(f'Testing: {prec1}/{best_prec1}, Loss CE: {(running_loss/len(train_loader)):.4f}')
+        print(f'Testing: {prec1}/{best_prec1}, Avg Loss KL: {running_kl/len(train_loader)}, Avg Loss All: {running_loss_all/len(train_loader)}')
         print('Saving:')
         filename = "{}/last_model.pt".format(working_dir)
 
@@ -178,9 +191,8 @@ def main():
         config = yaml.safe_load(f)
     working_dir = os.path.join('./exp', config['network']['type'], config['network']['arch'], config['data']['dataset'], args.log_time)
     
-    if 'seed' in config:
-        torch.manual_seed(int(config['seed'])) #1737328734)
-        numpy.random.seed(int(config['seed'])) #1737328734)
+    torch.manual_seed(int(config['seed'])) #1737328734)
+    numpy.random.seed(int(config['seed'])) #1737328734)
 
     wandb.init(project=config['network']['type'],name='{}_{}_{}_{}'.format(args.log_time,config['network']['type'], config['network']['arch'], config['data']['dataset']))
     print('-' * 80)
@@ -203,47 +215,17 @@ def main():
 
     perceptor, clip_state_dict = clip.load(config.network.arch,
                                            device=device,
-                                           jit=False, 
-                                           tsm=config.network.tsm, 
-                                           T=config.data.num_segments,
-                                           dropout=config.network.drop_out, 
-                                           emb_dropout=config.network.emb_dropout,
-                                           pretrain=config.network.init, 
-                                           joint = config.network.joint) #Must set jit=False for training  ViT-B/32
+                                           jit=False)
+                                        #    tsm=config.network.tsm, 
+                                        #    T=config.data.num_segments,
+                                        #    dropout=config.network.drop_out, 
+                                        #    emb_dropout=config.network.emb_dropout,
+                                        #    pretrain=config.network.init, 
+                                        #    joint = config.network.joint) #Must set jit=False for training  ViT-B/32
     transform_train = get_augmentation(True,config)
     transform_val = get_augmentation(False,config)
 
-    # Modify the attention mechanism in the visual transformer
-    class ModifiedAttention(torch.nn.Module):
-        def __init__(self, original_attention):
-            super().__init__()
-            self.original_attention = original_attention
-            self.attn_output_weights = torch.zeros(1, 50, 50, requires_grad=True)
-            self.attn_output_weights.retain_grad()
-
-        def forward(self, query, key, value, need_weights, attn_mask):
-            query = query / (query.size(-1) ** 0.5)
-            self.attn_output_weights = torch.matmul(query, key.transpose(-2, -1))  # QK^T
-            self.attn_output_weights = torch.nn.functional.softmax(self.attn_output_weights, dim=-1)
-
-            # self.attn_output_weights.requires_grad_()
-            # Retain gradient on attention weights
-            # self.attn_output_weights.retain_grad()
-
-            attn_output = torch.matmul(self.attn_output_weights, value)  # Weighted sum
-            return attn_output, self.attn_output_weights
-            # self.attn_output, self.attn_output_weights = self.original_attention(
-            #     query, key, value, need_weights=True, attn_mask=attn_mask
-            # )
-            # self.attn_output_weights.retain_grad()
-            # self.attn_output = torch.matmul(self.attn_output_weights, value)
-            # # print(self.attn_output.shape, self.attn_output_weights.shape)
-            # return self.attn_output, self.attn_output_weights
-
-    # Apply the modified attention layer to all layers in the visual transformer
-    for layer in perceptor.visual.transformer.resblocks:
-        layer.attn = ModifiedAttention(layer.attn)
-    # import pdb; pdb.set_trace()
+    bounded_clip = True
 
     if config.data.randaug.N > 0:
         transform_train = randAugment(transform_train, config)
@@ -261,56 +243,89 @@ def main():
     wandb.watch(perceptor)
     wandb.watch(fusion_model)
 
-    mask_transform = get_mask_augmentation(cut_size=224, 
-                                           cutn=1, 
-                                           cut_pow=1., 
-                                           noise_fac = 0.1, 
-                                           is_classifier=True)
 
-    def collate_fn(batch):
-        videos, masks, lambda_val, labels = zip(*batch)
-        # Check the labels for bb
-        videos, labels = torch.stack(videos), torch.tensor(labels)
-        lambda_val = torch.tensor(lambda_val)
-        masks = torch.stack(masks, dim=0)
-        videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-        # masks = masks.squeeze(dim=2)
-        iii, aug_masks = mask_transform((videos, masks))
-        # iii = iii.squeeze()
-        return videos, (aug_masks, lambda_val), labels
+    if bounded_clip:
+        mask_transform = get_mask_augmentation(cut_size=224, 
+                                            cutn=1, 
+                                            cut_pow=1., 
+                                            noise_fac = 0.1, 
+                                            is_classifier=True)
+        def collate_fn(batch):
+            videos, masks, lambda_val, labels = zip(*batch)
+            # Check the labels for bb
+            videos, labels = torch.stack(videos), torch.tensor(labels)
+            lambda_val = torch.tensor(lambda_val)
+            masks = torch.stack(masks, dim=0)
+            videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            # masks = masks.squeeze(dim=2)
+            iii, aug_masks = mask_transform((videos, masks))
+            # iii = iii.squeeze()
+            return videos, (aug_masks, lambda_val), labels
 
-    train_data = Action_DATASETS(
-                    config.data.train_list,
-                    config.data.label_list,
-                    num_segments=config.data.num_segments,
-                    image_tmpl=config.data.image_tmpl,
-                    random_shift=config.data.random_shift,
-                    image_transform=transform_train,
-                    bounding_boxes=config.bounding_boxes)
-    train_loader = DataLoader(
-                    train_data,
-                    batch_size=config.data.batch_size,
-                    num_workers=config.data.workers,
-                    shuffle=True,
-                    pin_memory=False,
-                    drop_last=True, 
-                    collate_fn=collate_fn)
-    val_data = Action_DATASETS(
-                    config.data.val_list,
-                    config.data.label_list, 
-                    random_shift=False,
-                    num_segments=config.data.num_segments,
-                    image_tmpl=config.data.image_tmpl,
-                    image_transform=transform_val,
-                    bounding_boxes=config.bounding_boxes)
-    val_loader = DataLoader(
-                    val_data,
-                    batch_size=config.data.batch_size,
-                    num_workers=config.data.workers,
-                    shuffle=False,
-                    pin_memory=False,
-                    drop_last=True,
-                    collate_fn=collate_fn)
+        train_data = Action_DATASETS(
+                        config.data.train_list,
+                        config.data.label_list,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        random_shift=config.data.random_shift,
+                        image_transform=transform_train,
+                        bounding_boxes=config.bounding_boxes)
+        train_loader = DataLoader(
+                        train_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=True,
+                        pin_memory=False,
+                        drop_last=True, 
+                        collate_fn=collate_fn)
+        val_data = Action_DATASETS(
+                        config.data.val_list,
+                        config.data.label_list, 
+                        random_shift=False,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        image_transform=transform_val,
+                        bounding_boxes=config.bounding_boxes)
+        val_loader = DataLoader(
+                        val_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=False,
+                        pin_memory=False,
+                        drop_last=True,
+                        collate_fn=collate_fn)
+    else:
+        train_data = Action_DATASETS_orig(
+                        config.data.train_list,
+                        config.data.label_list,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        random_shift=config.data.random_shift,
+                        transform=transform_train,
+                        bounding_boxes=config.bounding_boxes)
+        train_loader = DataLoader(
+                        train_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=True,
+                        pin_memory=False,
+                        drop_last=True)
+        val_data = Action_DATASETS_orig(
+                        config.data.val_list,
+                        config.data.label_list, 
+                        random_shift=False,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        transform=transform_val,
+                        bounding_boxes=config.bounding_boxes)
+        val_loader = DataLoader(
+                        val_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=False,
+                        pin_memory=False,
+                        drop_last=True)
+
 
     if device == "cpu":
         model_text.float()
@@ -355,7 +370,7 @@ def main():
     
     # 2. Find what the perceptor is for me
     # label_dict = {idx:class_name for idx, class_name in enumerate(train_data.classes)}
-    if config.bounding_boxes:
+    if bounded_clip and config.bounding_boxes:
         criterion_list = create_prompt_loss_dict(train_data.classes, perceptor, replace_grad, device)
     else:
         criterion_list = []

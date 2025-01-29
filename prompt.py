@@ -94,9 +94,9 @@ class PromptLoss(nn.Module):
         vals = vals + ['', '1', '-inf'][len(vals):]
         return vals[0], float(vals[1]), float(vals[2])
 
-    def spatial_explainability_loss(self, input_image, mask):
+    def spatial_explainability_loss(self, input_image, mask, token_text):
         batch_size = input_image.shape[0]
-        text = self.tokenized_text.repeat(batch_size, 1)
+        text = token_text.repeat(batch_size, 1)
         index = [i for i in range(batch_size)]
         clip_c = self.perceptor_model.logit_scale.exp()
         self.perceptor_model.zero_grad()
@@ -112,6 +112,7 @@ class PromptLoss(nn.Module):
             one_hot = torch.sum(one_hot.to(input_image.device) * logits_per_image)
 
             image_attn_blocks = list(dict(self.perceptor_model.visual.transformer.resblocks.named_children()).values())
+            # print(dir(image_attn_blocks[0]))
             num_tokens = image_attn_blocks[0].attn.attn_output_weights.shape[-1]
             R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn.attn_output_weights.dtype).to(logits_per_image.device)
             R = R.unsqueeze(0).expand(batch_size, num_tokens, num_tokens)
@@ -120,7 +121,7 @@ class PromptLoss(nn.Module):
                 if blk_idx <= 10:
                     continue
 
-                grad = torch.autograd.grad(one_hot, [blk.attn.attn_output_weights], retain_graph=True, create_graph=True, allow_unused=True)[0]
+                grad = torch.autograd.grad(one_hot, [blk.attn.attn_output_weights], retain_graph=True, create_graph=True)[0]
 
                 # print("It worked")
                 cam = blk.attn.attn_output_weights
@@ -161,12 +162,113 @@ class PromptLoss(nn.Module):
         masked_input = input_img * mask.to(input_img.device)
         masked_input = torch.cat([input_img, masked_input], dim=0)
 
-        expl_loss = self.spatial_explainability_loss(input_img, mask)
+        expl_loss = self.spatial_explainability_loss(input_img, mask, self.tokenized_text)
         expl_loss = expl_loss * dynamic_lambda
 
-        input_img = self.perceptor_model.encode_image(masked_input).float()
+        image_embedding = self.perceptor_model.encode_image(masked_input).float()
         # input = input.to(clip_device)
-        input_normed = F.normalize(input_img.unsqueeze(1), dim=2)
+        input_normed = F.normalize(image_embedding.unsqueeze(1), dim=2)
+
+        embed = self.perceptor_model.encode_text(self.tokenized_text).float()
+        embed_normed = F.normalize(embed.unsqueeze(0), dim=2)
+        dists = input_normed.sub(embed_normed).norm(dim=2).div(2).arcsin().pow(2).mul(2)
+        dists = dists * self.weight.sign()
+
+        loss = self.replace_grad(dists, torch.maximum(dists, self.stop)).mean() + expl_loss.mean()
+        return self.weight.abs() * loss
+
+class PromptLoss2(nn.Module):
+    def __init__(self, text, perceptor, replace_grad):
+        super().__init__()
+        txt, weight, stop = self.parse_prompt(text)
+        self.register_buffer('tokenized_text', clip.tokenize(text))
+        self.register_buffer('weight', torch.as_tensor(weight))
+        self.register_buffer('stop', torch.as_tensor(stop))
+        self.t = 0.1  # threshold
+        self.temperature = 20 # temp
+
+        self.perceptor_model = perceptor
+        self.replace_grad = replace_grad
+
+    def parse_prompt(self, prompt):
+        vals = prompt.rsplit(':', 2)
+        vals = vals + ['', '1', '-inf'][len(vals):]
+        return vals[0], float(vals[1]), float(vals[2])
+
+    def spatial_explainability_loss(self, input_image, mask, token_text):
+        batch_size = input_image.shape[0]
+        text = token_text.repeat(batch_size, 1)
+        index = [i for i in range(batch_size)]
+        clip_c = self.perceptor_model.logit_scale.exp()
+        self.perceptor_model.zero_grad()
+
+        with torch.enable_grad():
+            logits_per_image, logits_per_text = self.perceptor_model(input_image, text)
+            logits_per_image = logits_per_image
+            logits_per_image = logits_per_image / clip_c
+
+            one_hot = np.zeros((logits_per_image.shape[0], logits_per_image.shape[1]), dtype=np.float32)
+            one_hot[torch.arange(logits_per_image.shape[0]), index] = 1
+            one_hot = torch.from_numpy(one_hot).requires_grad_(True)
+            one_hot = torch.sum(one_hot.to(input_image.device) * logits_per_image)
+
+            image_attn_blocks = list(dict(self.perceptor_model.visual.transformer.resblocks.named_children()).values())
+            # print(dir(image_attn_blocks[0]))
+            num_tokens = image_attn_blocks[0].attn.attn_output_weights.shape[-1]
+            R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn.attn_output_weights.dtype).to(logits_per_image.device)
+            R = R.unsqueeze(0).expand(batch_size, num_tokens, num_tokens)
+
+            for blk_idx, blk in enumerate(image_attn_blocks):
+                if blk_idx <= 10:
+                    continue
+
+                grad = torch.autograd.grad(one_hot, [blk.attn.attn_output_weights], retain_graph=True, create_graph=True)[0]
+
+                # print("It worked")
+                cam = blk.attn.attn_output_weights
+                cam = cam.reshape(-1, cam.shape[-1], cam.shape[-1])
+                grad = grad.reshape(-1, grad.shape[-1], grad.shape[-1])
+                cam = grad * cam
+                cam = cam.reshape(batch_size, -1, cam.shape[-1], cam.shape[-1])
+                cam = cam.clamp(min=0).mean(dim=1)
+                R = R + torch.bmm(cam, R)
+
+            R[:, 0, 0] = 0
+            image_relevance = R[:, 0, 1:]
+
+            image_relevance = image_relevance.reshape(-1, 1, 7, 7)
+            image_relevance = torch.nn.functional.interpolate(image_relevance, size=mask.shape[-1], mode='bicubic')
+            image_relevance = image_relevance / torch.sum(image_relevance, dim=(-2, -1), keepdim=True)
+            max = image_relevance.max(dim=-1, keepdim=True)[0]
+            max = max.max(dim=-2, keepdim=True)[0]
+            img_expl = image_relevance / max
+
+            img_expl = (img_expl - self.t) * self.temperature
+            binarized_expl = torch.sigmoid(img_expl)
+
+            mask = mask.to(img_expl.device)
+            intersection = (binarized_expl * mask).float().sum((-2, -1))
+            union = (binarized_expl * (1 - mask)).float().sum((-2, -1))
+            # import pdb; pdb.set_trace()
+            mask_size = 1
+            for dim in mask.shape:
+                mask_size *= dim
+            # mask_size = (mask.shape[0] * mask.shape[1] * mask.shape[2] * mask.shape[3])
+            dice_loss = (2 * intersection / (2 * intersection + union))
+
+        self.perceptor_model.zero_grad()
+        return (-1) * dice_loss
+
+    def forward(self, input_img, mask, dynamic_lambda):
+        masked_input = input_img * mask.to(input_img.device)
+        masked_input = torch.cat([input_img, masked_input], dim=0)
+
+        expl_loss = self.spatial_explainability_loss(input_img, mask, self.tokenized_text)
+        expl_loss = expl_loss * dynamic_lambda
+
+        image_embedding = self.perceptor_model.encode_image(masked_input).float()
+        # input = input.to(clip_device)
+        input_normed = F.normalize(image_embedding.unsqueeze(1), dim=2)
 
         embed = self.perceptor_model.encode_text(self.tokenized_text).float()
         embed_normed = F.normalize(embed.unsqueeze(0), dim=2)

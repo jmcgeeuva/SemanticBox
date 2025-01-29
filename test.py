@@ -3,7 +3,10 @@
 # Mengmeng Wang, Jiazheng Xing, Yong Liu
 
 import os
-import clip
+import sys
+sys.path.insert(0, "./../explain/ml-no-token-left-behind/external/tamingtransformers/")
+sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
+import CLIP.clip as clip
 import torch.nn as nn
 from datasets import Action_DATASETS
 from torch.utils.data import DataLoader
@@ -47,8 +50,18 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
     with torch.no_grad():
         text_inputs = classes.to(device)
         text_features = model.encode_text(text_inputs)
-        for iii, (image,mask, class_id) in enumerate(tqdm(val_loader)):
-            image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
+        for iii, data in enumerate(tqdm(val_loader)):
+            if len(data) > 2:
+                image, mask, class_id = data
+                if mask:
+                    aug_masks, lambdas = mask
+                    aug_masks = aug_masks.to(device)
+                    lambdas = lambdas.to(device)
+            else:
+                image, class_id = data
+                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
+
+            # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
             b, t, c, h, w = image.size()
             class_id = class_id.to(device)
             image_input = image.to(device).view(-1, c, h, w)

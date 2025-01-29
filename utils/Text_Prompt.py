@@ -3,7 +3,10 @@
 # Mengmeng Wang, Jiazheng Xing, Yong Liu
 
 import torch
-import clip
+import sys
+sys.path.insert(0, "./../explain/ml-no-token-left-behind/external/tamingtransformers/")
+sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
+import CLIP.clip as clip
 
 # def text_prompt(data, file_name=None):
 #     text_aug = [f"a photo of action {{}}", f"a picture of action {{}}", f"Human action of {{}}", f"{{}}, an action",
