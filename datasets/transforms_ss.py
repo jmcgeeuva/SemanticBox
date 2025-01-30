@@ -5,9 +5,130 @@ import numpy as np
 import numbers
 import math
 import torch
-
-
 from PIL import Image, ImageOps, ImageFilter
+from enum import Enum
+from torch import nn
+import kornia.augmentation as K
+
+class DATASET(Enum):
+    MNIST = 1
+    FLOWERS = 2
+    CIFAR = 3
+    OXFORD_PET = 4
+
+
+class AddNoise(object):
+
+    def __init__(self, noise_fac, cutn):
+        self.noise_fac = 0.1
+        self.cutn = cutn
+
+    def __call__(self, data):
+        batch, augmented_masks = data
+        if self.noise_fac:
+            facs = batch.new_empty([self.cutn, 1, 1, 1]).uniform_(0, self.noise_fac)
+            batch = batch + facs * torch.randn_like(batch)
+        return batch, augmented_masks
+
+# class Stack(object):
+
+#     def __init__(self):
+#         pass
+
+#     def __call__(self, data):
+#         cutouts, augmented_masks = data
+#         if type(cutouts) != list:
+#             batch = torch.stack([cutouts], dim=0)
+#         else:
+#             batch = torch.stack(cutouts, dim=0)
+#         augmented_masks = torch.stack(augmented_masks, dim=0)
+#         return batch, augmented_masks
+
+class ImageAugmentations(object):
+
+    def __init__(self):
+        self.img_augs = nn.Sequential(
+            K.ColorJitter(hue=0.1, saturation=0.1, p=0.7),
+            K.RandomErasing((.1, .4), (.3, 1/.3), p=0.7),
+        )
+
+    def __call__(self, data):
+        batch, augmented_masks = data
+        batch = self.img_augs(batch)
+        return batch, augmented_masks
+
+# class GroupNormalize(object):
+#     def __init__(self):
+#         self.normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
+#                                     std=[0.26862954, 0.26130258, 0.27577711])
+
+#     def __call__(self, data):
+#         batch, augmented_masks = data
+#         batch, augmented_masks = self.normalize(batch), augmented_masks
+#         return batch, augmented_masks
+
+class GroupAug(object):
+    """Randomly Grayscale flips the given PIL.Image with a probability
+    """
+    def __init__(self, cut_size, cutn, cut_pow, noise_fac=0.1):
+        self.cut_size = cut_size
+        self.cutn = cutn
+        self.cut_pow = cut_pow
+        self.augs = nn.Sequential(
+            K.RandomAffine(degrees=15, translate=0.1, p=0.7, padding_mode='border', same_on_batch=True),
+            K.RandomPerspective(0.7,p=0.7, same_on_batch=True)
+        )
+        # self.img_augs = ImageAugmentations(is_classifier)
+        self.add_noise = AddNoise(noise_fac=noise_fac, cutn=cutn)
+        self.frame_len = 8
+        self.av_pool = nn.AdaptiveAvgPool3d((self.frame_len, self.cut_size, self.cut_size))
+        self.max_pool = nn.AdaptiveMaxPool3d((self.frame_len, self.cut_size, self.cut_size))
+
+    def __call__(self, data):
+        input_img, input_masks = data['videos'], data['masks']
+        cutouts = []
+        augmented_masks = []
+
+        masks = []
+
+        permuted_input_img = input_img.permute(0, 2, 1, 3, 4) # switch time and channel
+        for mask_i in range(len(input_masks)):
+            curr_mask = input_masks[mask_i].permute(1, 0, 2, 3)
+            curr_mask = (self.av_pool(curr_mask) + self.max_pool(curr_mask))/2
+            curr_mask = curr_mask.unsqueeze(0)
+            masks.append(curr_mask)
+        cutout = (self.av_pool(permuted_input_img) + self.max_pool(permuted_input_img))/2
+
+        sample = torch.cat([cutout] + masks, dim=0)
+        
+        beg_neutral_masks = len([cutout] + masks)
+
+        sample = sample.permute(0, 2, 1, 3, 4) # switch time and channel back
+        b, t, c, h, w = sample.size()
+        sample = sample.reshape(-1, c, h, w)
+        aug_sample = self.augs(sample)
+        # (128+128)x3x224x224
+        aug_sample = aug_sample.reshape(b, t, c, h, w)
+        cutouts.append(aug_sample[0:input_img.shape[0]])
+
+        curr_augmented_masks = aug_sample[input_img.shape[0]::]
+        curr_augmented_masks = curr_augmented_masks[:, :, 0:1, ...]
+        curr_augmented_masks = torch.round(curr_augmented_masks)
+        augmented_masks.append(curr_augmented_masks)
+
+        batch = torch.stack(cutouts, dim=0)
+        batch = batch.reshape(-1, c, h, w)
+        batch = batch.squeeze()
+        augmented_masks = torch.stack(augmented_masks, dim=0)
+        augmented_masks = augmented_masks.reshape(-1, 1, h, w)
+        augmented_masks = augmented_masks.squeeze(dim=0)
+        
+        batch, augmented_masks = self.add_noise((batch, augmented_masks))
+        batch = batch.reshape(input_img.shape[0], t, c, h, w)
+        augmented_masks = augmented_masks.reshape(input_img.shape[0], t, 1, h, w)
+        return batch, augmented_masks
+
+
 class GroupRandomCrop(object):
     def __init__(self, size):
         if isinstance(size, numbers.Number):
@@ -36,8 +157,9 @@ class GroupCenterCrop(object):
     def __init__(self, size):
         self.worker = torchvision.transforms.CenterCrop(size)
 
-    def __call__(self, img_group):
-        return [self.worker(img) for img in img_group]
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+        return {'video': [self.worker(img) for img in img_group], 'mask': [self.worker(img) for img in img_mask]}
     
 class GroupRandomHorizontalFlip(object):
     """Randomly horizontally flips the given PIL.Image with a probability of 0.5
@@ -45,14 +167,19 @@ class GroupRandomHorizontalFlip(object):
     def __init__(self, is_sth=False):
         self.is_sth = is_sth
 
-    def __call__(self, img_group, is_sth=False):
-        v = random.random()
+    def random_horizontal_flip(self, img_group, v):
         if not self.is_sth and v < 0.5:
             
-            ret = [img.transpose(Image.FLIP_LEFT_RIGHT) for img in img_group]
-            return ret
-        else:
-            return img_group
+            img_group = [img.transpose(Image.FLIP_LEFT_RIGHT) for img in img_group]
+
+        return img_group
+
+    def __call__(self, data, is_sth=False):
+        img_group, img_mask = data['video'], data['mask']
+        v = random.random()
+        img_group = self.random_horizontal_flip(img_group, v)
+        img_mask = self.random_horizontal_flip(img_mask, v)
+        return {'video': img_group, 'mask': img_mask}
     
 class GroupNormalize1(object):
     def __init__(self, mean, std):
@@ -70,7 +197,7 @@ class GroupNormalize(object):
         self.mean = mean
         self.std = std
 
-    def __call__(self, tensor):
+    def normalize(self, tensor):
         mean = self.mean * (tensor.size()[0]//len(self.mean))
         std = self.std * (tensor.size()[0]//len(self.std))
         mean = torch.Tensor(mean)
@@ -83,6 +210,12 @@ class GroupNormalize(object):
             # for 4-D tensor (C, T, H, W)
             tensor.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
         return tensor
+
+    def __call__(self, data):
+        tensor, img_mask = data['video'], data['mask']
+        img_group = self.normalize(tensor)
+        img_mask = self.normalize(img_mask)
+        return {'video': img_group, 'mask': img_mask}
 
 
 class GroupScale(object):
@@ -97,8 +230,9 @@ class GroupScale(object):
     def __init__(self, size, interpolation=Image.BICUBIC):
         self.worker = torchvision.transforms.Resize(size, interpolation)
 
-    def __call__(self, img_group):
-        return [self.worker(img) for img in img_group]
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+        return {'video': [self.worker(img) for img in img_group], 'mask': [self.worker(img) for img in img_mask]}
 
 
 class GroupOverSample(object):
@@ -169,26 +303,29 @@ class GroupFCSample(object):
 
 class GroupMultiScaleCrop(object):
 
-    def __init__(self, input_size, scales=None, bounding_boxes=False, max_distort=1, fix_crop=True, more_fix_crop=True):
+    def __init__(self, input_size, scales=None, max_distort=1, fix_crop=True, more_fix_crop=True):
         self.scales = scales if scales is not None else [1, .875, .75, .66]
         self.max_distort = max_distort
         self.fix_crop = fix_crop
         self.more_fix_crop = more_fix_crop
         self.input_size = input_size if not isinstance(input_size, int) else [input_size, input_size]
         self.interpolation = Image.BILINEAR
-        self.bounding_boxes = bounding_boxes
 
-    def __call__(self, img_group):
-
+    def multiscale_crop(self, img_group):
         im_size = img_group[0].size
-
         crop_w, crop_h, offset_w, offset_h = self._sample_crop_size(im_size)
-        # FIXME create a different class just for when bbs are used
-        if not self.bounding_boxes:
-            img_group = [img.crop((offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)) for img in img_group]
+        img_group = [img.crop((offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)) for img in img_group]
         ret_img_group = [img.resize((self.input_size[0], self.input_size[1]), self.interpolation)
                          for img in img_group]
         return ret_img_group
+
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+
+        ret_img_group = self.multiscale_crop(img_group)
+        ret_img_mask = self.multiscale_crop(img_mask)
+
+        return {'video': ret_img_group, 'mask': ret_img_mask}
 
     def _sample_crop_size(self, im_size):
         image_w, image_h = im_size[0], im_size[1]
@@ -318,6 +455,7 @@ class Stack(object):
                 # plt.imshow(rst[:,:,3:6])
                 # plt.show()
                 return rst
+        return img_group
 
 class Stack1(object):
 
@@ -378,15 +516,19 @@ class GroupRandomColorJitter(object):
         self.worker = torchvision.transforms.ColorJitter(brightness=brightness, contrast=contrast,
                                         saturation=saturation, hue=hue)
 
-    def __call__(self, img_group):
-        
-        v = random.random()
+    def random_color_jitter(self, img_group, v):
         if v < self.p:
-            ret = [self.worker(img) for img in img_group]
+            img_group = [self.worker(img) for img in img_group]
             
-            return ret
-        else:
-            return img_group
+        return img_group
+
+
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+        v = random.random()
+        img_group = self.random_color_jitter(img_group, v)
+        img_mask = self.random_color_jitter(img_mask, v)
+        return {'video': img_group, 'mask': img_mask}
 
 class GroupRandomGrayscale(object):
     """Randomly Grayscale flips the given PIL.Image with a probability
@@ -395,33 +537,79 @@ class GroupRandomGrayscale(object):
         self.p = p
         self.worker = torchvision.transforms.Grayscale(num_output_channels=3)
 
-    def __call__(self, img_group):
+    def random_grayscale(self, img_group, v):
+        if v < self.p:
+            img_group = [self.worker(img) for img in img_group]
+            
+        return img_group
+
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
        
         v = random.random()
-        if v < self.p:
-            ret = [self.worker(img) for img in img_group]
-            
-            return ret
-        else:
-            return img_group
+        img_group = self.random_grayscale(img_group, v)
+        img_mask = self.random_grayscale(img_mask, v)
+        return {'video': img_group, 'mask': img_mask}
 
 class GroupGaussianBlur(object):
     def __init__(self, p):
         self.p = p
 
-    def __call__(self, img_group):
-        if random.random() < self.p:
-            sigma = random.random() * 1.9 + 0.1
-            return [img.filter(ImageFilter.GaussianBlur(sigma))  for img in img_group]
-        else:
-            return img_group
+    def gaussian_blur(self, img_group, v, sigma_rand):
+        if v < self.p:
+            sigma = sigma_rand * 1.9 + 0.1
+            img_group = [img.filter(ImageFilter.GaussianBlur(sigma))  for img in img_group]
+
+        return img_group
+
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+        v = random.random()
+        sigma_rand = random.random()
+        img_group = self.gaussian_blur(img_group, v, sigma_rand)
+        # img_mask = self.gaussian_blur(img_mask, v, sigma_rand)
+        return {'video': img_group, 'mask': img_mask}
 
 class GroupSolarization(object):
     def __init__(self, p):
         self.p = p
 
-    def __call__(self, img_group):
-        if random.random() < self.p:
-            return [ImageOps.solarize(img)  for img in img_group]
-        else:
-            return img_group
+    def solarization(self, img_group, v):
+        if v < self.p:
+            img_group = [ImageOps.solarize(img)  for img in img_group]
+        return img_group
+
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+        v = random.random()
+
+        img_group = self.solarization(img_group, v)
+        img_mask = self.solarization(img_mask, v)
+        
+        return {'video': img_group, 'mask': img_mask}
+
+
+class GroupStack(object):
+
+    def __init__(self, roll):
+        self.roll = roll
+        self.stack = Stack(roll=roll)
+
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+
+        img_group = self.stack(img_group)
+        img_mask = self.stack(img_mask)
+        return {'video': img_group, 'mask': img_mask}
+
+class GroupToTorchFormatTensor(object):
+
+    def __init__(self, div):
+        self.to_float_tensor = ToTorchFormatTensor(div=div)
+
+    def __call__(self, data):
+        img_group, img_mask = data['video'], data['mask']
+
+        img_group = self.to_float_tensor(img_group)
+        img_mask = self.to_float_tensor(img_mask)
+        return {'video': img_group, 'mask': img_mask}

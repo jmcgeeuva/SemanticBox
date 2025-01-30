@@ -89,7 +89,6 @@ class Action_DATASETS(data.Dataset):
                  new_length: int = 1,
                  image_tmpl: str ='img_{:05d}.jpg', 
                  image_transform: Optional[Callable] = None,
-                 bb_transform: Optional[Callable] = None,
                  target_transform: Optional[Callable] = None,
                  model_resolution: int = 224,
                  random_shift: bool =True, 
@@ -101,7 +100,11 @@ class Action_DATASETS(data.Dataset):
                  expl_weight_according_to_mask_ratio: bool = True,
                  label_box: bool=False, 
                  debug: bool=False,
-                 bounding_boxes: bool=False):
+                 bounding_boxes: bool=False,
+                 cut_size=224, 
+                 cutn=1, 
+                 cut_pow=1., 
+                 noise_fac = 0.1):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -121,6 +124,11 @@ class Action_DATASETS(data.Dataset):
         self.expl_loss_weight = expl_loss_weight
         self.expl_weight_according_to_mask_ratio = expl_weight_according_to_mask_ratio
 
+        self.cut_size = cut_size
+        self.cutn = cutn
+        self.cut_pow = cut_pow
+        self.noise_fac = noise_fac
+
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
                 self.index_bias = 0
@@ -131,11 +139,6 @@ class Action_DATASETS(data.Dataset):
 
         self.image_transform = image_transform
         self.target_transform = target_transform
-        self.bb_transform = bb_transform
-        if not self.bb_transform:
-            self.bb_transform = transforms.Compose([
-                transforms.Resize((224, 224))
-            ])
 
     def _load_image(self, directory, idx):
 
@@ -301,15 +304,19 @@ class Action_DATASETS(data.Dataset):
             images.extend(seg_imgs)
             masks.append(mask)
             lambdas.append(lambda_val)
-
-        if self.bb_transform:
-            mask = self.bb_transform(mask)
             
         if self.image_transform:
-            data = {'image': images, 'bb': mask}
-            process_data = self.image_transform(images)
+            from torchvision.transforms import ToPILImage
+            # make the mask into an image so the image translations work
+            image_masks = []
+            pil_transform = ToPILImage()
+            for mask in masks:
+                image_masks.append(pil_transform(mask.squeeze(dim=0)))
+            data = {'video': images, 'mask': image_masks}
+            data = self.image_transform(data)
+            process_data, masks = data['video'], data['mask']
 
-        return process_data, torch.stack(masks), lambdas, record.label
+        return process_data, masks, lambdas, record.label
 
     def __len__(self):
         return len(self.video_list)

@@ -270,6 +270,7 @@ def main():
             lambda_val = torch.tensor(lambda_val)
             masks = torch.stack(masks, dim=0)
             videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
             # masks = masks.squeeze(dim=2)
             data = {'videos': videos, 'masks': masks}
             iii, aug_masks = mask_transform(data)
