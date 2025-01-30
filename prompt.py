@@ -76,10 +76,26 @@ from helpers import ReplaceGrad
 
 from helpers import *
 
+class TextCLIP(nn.Module):
+    def __init__(self, model) :
+        super(TextCLIP, self).__init__()
+        self.model = model
+
+    def forward(self,text):
+        return self.model.encode_text(text)
+
+class ImageCLIP(nn.Module):
+    def __init__(self, model) :
+        super(ImageCLIP, self).__init__()
+        self.model = model
+
+    def forward(self,image):
+        return self.model.encode_image(image)
+
 class PromptLoss(nn.Module):
     def __init__(self, text, perceptor, replace_grad):
         super().__init__()
-        txt, weight, stop = self.parse_prompt(text)
+        text, weight, stop = self.parse_prompt(text)
         self.register_buffer('tokenized_text', clip.tokenize(text))
         self.register_buffer('weight', torch.as_tensor(weight))
         self.register_buffer('stop', torch.as_tensor(stop))
@@ -91,12 +107,17 @@ class PromptLoss(nn.Module):
 
     def parse_prompt(self, prompt):
         vals = prompt.rsplit(':', 2)
+        # if only one or neither of the weight/stop are 
+        # provided then set to defaults weight = 1 and stop = -inf
         vals = vals + ['', '1', '-inf'][len(vals):]
         return vals[0], float(vals[1]), float(vals[2])
 
     def spatial_explainability_loss(self, input_image, mask, token_text):
         batch_size = input_image.shape[0]
+        print(input_image.shape,token_text.shape)
         text = token_text.repeat(batch_size, 1)
+        print(text.shape)
+        raise ValueError("test")
         index = [i for i in range(batch_size)]
         clip_c = self.perceptor_model.logit_scale.exp()
         self.perceptor_model.zero_grad()
@@ -162,6 +183,7 @@ class PromptLoss(nn.Module):
         masked_input = input_img * mask.to(input_img.device)
         masked_input = torch.cat([input_img, masked_input], dim=0)
 
+        print(self.tokenized_text.shape)
         expl_loss = self.spatial_explainability_loss(input_img, mask, self.tokenized_text)
         expl_loss = expl_loss * dynamic_lambda
 
@@ -169,7 +191,9 @@ class PromptLoss(nn.Module):
         # input = input.to(clip_device)
         input_normed = F.normalize(image_embedding.unsqueeze(1), dim=2)
 
+        print(self.tokenized_text.shape)
         embed = self.perceptor_model.encode_text(self.tokenized_text).float()
+        raise ValueError("test")
         embed_normed = F.normalize(embed.unsqueeze(0), dim=2)
         dists = input_normed.sub(embed_normed).norm(dim=2).div(2).arcsin().pow(2).mul(2)
         dists = dists * self.weight.sign()
@@ -178,10 +202,10 @@ class PromptLoss(nn.Module):
         return self.weight.abs() * loss
 
 class PromptLoss2(nn.Module):
-    def __init__(self, text, perceptor, replace_grad):
+    def __init__(self, perceptor, replace_grad):
         super().__init__()
-        txt, weight, stop = self.parse_prompt(text)
-        self.register_buffer('tokenized_text', clip.tokenize(text))
+        weight = float('1')
+        stop = float('-inf')
         self.register_buffer('weight', torch.as_tensor(weight))
         self.register_buffer('stop', torch.as_tensor(stop))
         self.t = 0.1  # threshold
@@ -190,14 +214,18 @@ class PromptLoss2(nn.Module):
         self.perceptor_model = perceptor
         self.replace_grad = replace_grad
 
-    def parse_prompt(self, prompt):
-        vals = prompt.rsplit(':', 2)
-        vals = vals + ['', '1', '-inf'][len(vals):]
-        return vals[0], float(vals[1]), float(vals[2])
+        ###################### Action Clip #########################
+        # self.loss_img = KLLoss()
+        # self.loss_txt = KLLoss()
+        # self.model_text = TextCLIP(perceptor)
+        # self.model_image = ImageCL
 
     def spatial_explainability_loss(self, input_image, mask, token_text):
+        # t,c,h,w = input_image.size()
+        # input_image= input_image.view(-1,c,h,w )
         batch_size = input_image.shape[0]
         text = token_text.repeat(batch_size, 1)
+        # text = token_text.repeat(batch_size, 1)
         index = [i for i in range(batch_size)]
         clip_c = self.perceptor_model.logit_scale.exp()
         self.perceptor_model.zero_grad()
@@ -239,9 +267,9 @@ class PromptLoss2(nn.Module):
             image_relevance = image_relevance.reshape(-1, 1, 7, 7)
             image_relevance = torch.nn.functional.interpolate(image_relevance, size=mask.shape[-1], mode='bicubic')
             image_relevance = image_relevance / torch.sum(image_relevance, dim=(-2, -1), keepdim=True)
-            max = image_relevance.max(dim=-1, keepdim=True)[0]
-            max = max.max(dim=-2, keepdim=True)[0]
-            img_expl = image_relevance / max
+            image_max = image_relevance.max(dim=-1, keepdim=True)[0]
+            image_max = image_max.max(dim=-2, keepdim=True)[0]
+            img_expl = image_relevance / image_max
 
             img_expl = (img_expl - self.t) * self.temperature
             binarized_expl = torch.sigmoid(img_expl)
@@ -256,24 +284,34 @@ class PromptLoss2(nn.Module):
             # mask_size = (mask.shape[0] * mask.shape[1] * mask.shape[2] * mask.shape[3])
             dice_loss = (2 * intersection / (2 * intersection + union))
 
+
         self.perceptor_model.zero_grad()
         return (-1) * dice_loss
 
-    def forward(self, input_img, mask, dynamic_lambda):
+    def forward(self, input_img, mask, dynamic_lambda, tokenized_text):
         masked_input = input_img * mask.to(input_img.device)
         masked_input = torch.cat([input_img, masked_input], dim=0)
 
-        expl_loss = self.spatial_explainability_loss(input_img, mask, self.tokenized_text)
+        expl_loss = self.spatial_explainability_loss(input_img, mask, tokenized_text)
         expl_loss = expl_loss * dynamic_lambda
 
-        image_embedding = self.perceptor_model.encode_image(masked_input).float()
-        # input = input.to(clip_device)
-        input_normed = F.normalize(image_embedding.unsqueeze(1), dim=2)
+        image_embedding = self.perceptor_model.encode_image(masked_input)
+        img_embed_float = image_embedding.float()
+        input_normed = F.normalize(img_embed_float.unsqueeze(1), dim=2)
 
-        embed = self.perceptor_model.encode_text(self.tokenized_text).float()
-        embed_normed = F.normalize(embed.unsqueeze(0), dim=2)
+        text = tokenized_text.unsqueeze(0)
+        text_embedding = self.perceptor_model.encode_text(text)
+        embed_float = text_embedding.float()
+        embed_normed = F.normalize(embed_float.unsqueeze(0), dim=2)
         dists = input_normed.sub(embed_normed).norm(dim=2).div(2).arcsin().pow(2).mul(2)
         dists = dists * self.weight.sign()
 
         loss = self.replace_grad(dists, torch.maximum(dists, self.stop)).mean() + expl_loss.mean()
-        return self.weight.abs() * loss
+
+        final_loss = self.weight.abs() * loss
+
+        # Just the mask embedding
+        image_embedding = image_embedding[0:8]
+        # Average the masks and image embeddings
+        # image_embedding = image_embedding.view(8, 2, 512).mean(dim=1)
+        return final_loss, text_embedding, image_embedding

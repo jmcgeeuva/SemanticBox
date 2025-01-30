@@ -107,7 +107,6 @@ class Action_DATASETS(data.Dataset):
         self.num_segments = num_segments
         self.seg_length = new_length
         self.image_tmpl = image_tmpl
-        self.image_transform = image_transform
         self.random_shift = random_shift
         self.test_mode = test_mode
         self.loop=False
@@ -130,6 +129,7 @@ class Action_DATASETS(data.Dataset):
         self._parse_list()
         self.initialized = False
 
+        self.image_transform = image_transform
         self.target_transform = target_transform
         self.bb_transform = bb_transform
         if not self.bb_transform:
@@ -306,6 +306,7 @@ class Action_DATASETS(data.Dataset):
             mask = self.bb_transform(mask)
             
         if self.image_transform:
+            data = {'image': images, 'bb': mask}
             process_data = self.image_transform(images)
 
         return process_data, torch.stack(masks), lambdas, record.label

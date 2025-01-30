@@ -25,27 +25,11 @@ from utils.saving import  *
 import sys
 sys.path.insert(0, "../explain/ml-no-token-left-behind/external/tamingtransformers/")
 sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
-from prompt import PromptLoss
+from prompt import PromptLoss, TextCLIP, ImageCLIP
+from prompt import PromptLoss2 as pl2
 from helpers import ReplaceGrad
-from augmentation import get_mask_augmentation
 
 import torch
-
-class TextCLIP(nn.Module):
-    def __init__(self, model) :
-        super(TextCLIP, self).__init__()
-        self.model = model
-
-    def forward(self,text):
-        return self.model.encode_text(text)
-
-class ImageCLIP(nn.Module):
-    def __init__(self, model) :
-        super(ImageCLIP, self).__init__()
-        self.model = model
-
-    def forward(self,image):
-        return self.model.encode_image(image)
 
 def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
     # keys = sorted(list(label_names.keys()))
@@ -59,6 +43,7 @@ def train_classifier(start_epoch,
                      loss_img,
                      loss_txt,
                      criterion_list,
+                     promptCrit,
                      lr_scheduler,
                      config, 
                      text_dict,
@@ -107,11 +92,67 @@ def train_classifier(start_epoch,
             videos= videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
             texts = texts.to(device)
 
-            image_embedding = model_image(videos)
-            image_embedding = image_embedding.view(b,t,-1)
-            image_embedding = fusion_model(image_embedding)
 
-            text_embedding = model_text(texts)
+            ############## Calculate explainability loss between attn and mask ###########
+            # run through the prompt model and get the new results from the prompts
+            lossAll = []
+            per_frame = False
+            loop_list = True
+            text_list = []
+            image_list = []
+            if len(criterion_list) > 0:
+                # for each label in the list and for each invidividual video (there are 16 of them)
+                if loop_list:
+                    videos = videos.reshape(b,t,c,h,w)
+                    for idx, label in enumerate(list_id.detach().cpu()):
+                        # find the loss for this specific bounding box
+                        prompt_idx = int(label)
+                        crit = criterion_list[prompt_idx]
+                        if per_frame:
+                            subloss = []
+                            # print(videos[idx].shape, aug_masks[idx].shape, lambdas[idx].shape)
+                            # for each frame (in a group of 8 frames), the given mask, and its lambda
+                            for curr_iter, (curr_image, curr_mask, curr_lambda) in enumerate(zip(videos[idx], aug_masks[idx], lambdas[idx])):
+                                # Needs to be 1x3x224x224 for curr_image
+                                curr_image = curr_image.unsqueeze(0)
+                                # print(curr_image.shape, curr_mask.shape, curr_lambda.shape)
+                                # raise ValueError("test")
+                                res = crit(curr_image, curr_mask, curr_lambda)
+                                subloss.append(res)
+                            lossAll.append(sum(subloss)/len(subloss))
+                        else: # untested
+                            curr_image = videos[idx]
+                            curr_mask = aug_masks[idx]
+                            curr_lambda = lambdas[idx]
+                            token = texts[idx]
+
+                            # video_tensor = videos.view(-1,c,h,w )
+                            # image_embedding = model_image(videos[idx])
+
+                            res, text_embedding, image_embedding2 = promptCrit(curr_image, curr_mask, curr_lambda, token)
+                            image_list.append(image_embedding2)
+                            
+                            text_list.append(text_embedding[0])
+                            lossAll.append(res)
+                    loss_all = (sum(lossAll))
+                    text_embedding = torch.stack(text_list)
+                    image_embedding = torch.stack(image_list)
+                    image_embedding = image_embedding.view(b,t,-1)
+                    image_embedding = fusion_model(image_embedding)
+                else:
+                    # give the loss function the current text to unify the two
+                    videos = videos.reshape(b,t,c,h,w)
+                    print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
+                    loss_all = promptCrit(videos, aug_masks, lambdas, texts)
+                    raise ValueError("test")
+                    
+            if not (loop_list and not per_frame):
+                video_tensor = videos.view(-1,c,h,w )
+                image_embedding = model_image(video_tensor)
+                image_embedding = image_embedding.view(b,t,-1)
+                image_embedding = fusion_model(image_embedding)
+
+                text_embedding = model_text(texts)
 
             if config.network.fix_text:
                 text_embedding.detach_()
@@ -123,35 +164,8 @@ def train_classifier(start_epoch,
             loss_imgs = loss_img(logits_per_image,ground_truth)
             loss_texts = loss_txt(logits_per_text,ground_truth)
 
-            # print(dir(perceptor.visual.transformer.resblocks[0].attn))
-            # print(dir(perceptor.visual.transformer.resblocks[0]))
-            # raise ValueError("test")
-            ############## Calculate explainability loss between attn and mask ###########
-            # run through the prompt model and get the new results from the prompts
-            lossAll = []
-            per_frame = True
-            if len(criterion_list) > 0:
-                # for each label in the list and for each invidividual video (there are 16 of them)
-                for idx, label in enumerate(list_id.detach().cpu()):
-                    # find the loss for this specific bounding box
-                    prompt_idx = int(label)
-                    crit = criterion_list[prompt_idx]
-                    if per_frame:
-                        subloss = []
-                        # for each frame (in a group of 8 frames), the given mask, and its lambda
-                        for curr_iter, (curr_image, curr_mask, curr_lambda) in enumerate(zip(videos[8*idx:8*(idx+1)], aug_masks[idx], lambdas[idx])):
-                            # Needs to be 1x3x224x224 for curr_image
-                            curr_image = curr_image.unsqueeze(0)
-                            res = crit(curr_image, curr_mask, curr_lambda)
-                            subloss.append(res)
-                        lossAll.append(sum(subloss)/len(subloss))
-                    else: # untested
-                        res = crit(videos[8*idx:8*(idx+1)].unsqueeze(0), aug_masks[idx], lambdas[idx])
-                        lossAll.append(res)
-
             kl_loss = (loss_imgs + loss_texts)/2
-            loss_all = (sum(lossAll)/len(lossAll))
-            total_loss = .7*(kl_loss) + .3*(loss_all)
+            total_loss = (kl_loss) + .5*(loss_all)
             running_kl += kl_loss.item()
             running_loss_all += loss_all.item()
 
@@ -248,8 +262,7 @@ def main():
         mask_transform = get_mask_augmentation(cut_size=224, 
                                             cutn=1, 
                                             cut_pow=1., 
-                                            noise_fac = 0.1, 
-                                            is_classifier=True)
+                                            noise_fac = 0.1)
         def collate_fn(batch):
             videos, masks, lambda_val, labels = zip(*batch)
             # Check the labels for bb
@@ -258,7 +271,8 @@ def main():
             masks = torch.stack(masks, dim=0)
             videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
             # masks = masks.squeeze(dim=2)
-            iii, aug_masks = mask_transform((videos, masks))
+            data = {'videos': videos, 'masks': masks}
+            iii, aug_masks = mask_transform(data)
             # iii = iii.squeeze()
             return videos, (aug_masks, lambda_val), labels
 
@@ -386,11 +400,13 @@ def main():
     optimizer = _optimizer(config, perceptor, fusion_model)
     lr_scheduler = _lr_scheduler(config, optimizer)
 
+    promptCrit = pl2(perceptor, replace_grad).to(device)
 
     train_classifier(start_epoch = start_epoch, 
                      loss_img = loss_img,
                      loss_txt = loss_txt,
                      criterion_list = criterion_list,
+                     promptCrit = promptCrit,
                      lr_scheduler = lr_scheduler,
                      config = config, 
                      text_dict = text_dict,

@@ -109,7 +109,7 @@ class TemporalTransformer(nn.Module):
 
 
 class visual_prompt(nn.Module):
-    def __init__(self, sim_head, clip_state_dict, T):
+    def __init__(self, sim_head, clip_state_dict, T, double_embedding=False):
         super().__init__()
         self.sim_header = sim_head
         self.T = T
@@ -117,6 +117,9 @@ class visual_prompt(nn.Module):
 
         if self.sim_header == "LSTM" or self.sim_header == "Transf" or self.sim_header == "Transf_cls" or self.sim_header == "Conv_1D" :
             embed_dim = clip_state_dict["text_projection"].shape[1]
+
+            if double_embedding:
+                embed_dim *= 2
 
             context_length = clip_state_dict["positional_embedding"].shape[0]
             vocab_size = clip_state_dict["token_embedding.weight"].shape[0]
