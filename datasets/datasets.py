@@ -99,12 +99,7 @@ class Action_DATASETS(data.Dataset):
                  expl_loss_weight: float = 0.15,
                  expl_weight_according_to_mask_ratio: bool = True,
                  label_box: bool=False, 
-                 debug: bool=False,
-                 bounding_boxes: bool=False,
-                 cut_size=224, 
-                 cutn=1, 
-                 cut_pow=1., 
-                 noise_fac = 0.1):
+                 debug: bool=False):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -119,15 +114,9 @@ class Action_DATASETS(data.Dataset):
         self.width = width
         self.label_box = label_box
         self.debug = debug
-        self.bounding_boxes = bounding_boxes
         self.model_resolution = model_resolution
         self.expl_loss_weight = expl_loss_weight
         self.expl_weight_according_to_mask_ratio = expl_weight_according_to_mask_ratio
-
-        self.cut_size = cut_size
-        self.cutn = cutn
-        self.cut_pow = cut_pow
-        self.noise_fac = noise_fac
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -311,12 +300,13 @@ class Action_DATASETS(data.Dataset):
             image_masks = []
             pil_transform = ToPILImage()
             for mask in masks:
-                image_masks.append(pil_transform(mask.squeeze(dim=0)))
+                image_masks.append(pil_transform(mask.squeeze(dim=0)).convert('RGB'))
             data = {'video': images, 'mask': image_masks}
             data = self.image_transform(data)
-            process_data, masks = data['video'], data['mask']
+            process_data, image_masks = data['video'], data['mask']
 
-        return process_data, masks, lambdas, record.label
+        return process_data, image_masks, lambdas, record.label
+        # return process_data, torch.stack(masks), lambdas, record.label
 
     def __len__(self):
         return len(self.video_list)

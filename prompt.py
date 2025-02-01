@@ -202,7 +202,7 @@ class PromptLoss(nn.Module):
         return self.weight.abs() * loss
 
 class PromptLoss2(nn.Module):
-    def __init__(self, perceptor, replace_grad):
+    def __init__(self, perceptor, replace_grad, im_emb_type='just_image'): 
         super().__init__()
         weight = float('1')
         stop = float('-inf')
@@ -213,12 +213,7 @@ class PromptLoss2(nn.Module):
 
         self.perceptor_model = perceptor
         self.replace_grad = replace_grad
-
-        ###################### Action Clip #########################
-        # self.loss_img = KLLoss()
-        # self.loss_txt = KLLoss()
-        # self.model_text = TextCLIP(perceptor)
-        # self.model_image = ImageCL
+        self.im_emb_type= im_emb_type
 
     def spatial_explainability_loss(self, input_image, mask, token_text):
         # t,c,h,w = input_image.size()
@@ -227,13 +222,17 @@ class PromptLoss2(nn.Module):
         text = token_text.repeat(batch_size, 1)
         # text = token_text.repeat(batch_size, 1)
         index = [i for i in range(batch_size)]
-        clip_c = self.perceptor_model.logit_scale.exp()
+        logit_scale = self.perceptor_model.logit_scale.exp()
         self.perceptor_model.zero_grad()
 
         with torch.enable_grad():
-            logits_per_image, logits_per_text = self.perceptor_model(input_image, text)
-            logits_per_image = logits_per_image
-            logits_per_image = logits_per_image / clip_c
+            text_embedding = self.perceptor_model.encode_text(text)
+            image_embedding = self.perceptor_model.encode_image(input_image)
+            logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
+            # No need to do fusion here because it analyzes attention per frame not video
+            # logits_per_image, logits_per_text = self.perceptor_model(input_image, text)
+            # logits_per_image = logits_per_image
+            # logits_per_image = logits_per_image / logit_scale
 
             one_hot = np.zeros((logits_per_image.shape[0], logits_per_image.shape[1]), dtype=np.float32)
             one_hot[torch.arange(logits_per_image.shape[0]), index] = 1
@@ -311,7 +310,12 @@ class PromptLoss2(nn.Module):
         final_loss = self.weight.abs() * loss
 
         # Just the mask embedding
-        image_embedding = image_embedding[0:8]
-        # Average the masks and image embeddings
-        # image_embedding = image_embedding.view(8, 2, 512).mean(dim=1)
+        if self.im_emb_type == 'just_image':
+            image_embedding = image_embedding[0:8]
+        elif self.im_emb_type == 'just_mask':
+            image_embedding = image_embedding[8::]
+        elif self.im_emb_type == 'average':
+            # Average the masks and image embeddings
+            image_embedding = image_embedding.view(8, 2, 512).mean(dim=1)
+        
         return final_loss, text_embedding, image_embedding

@@ -7,7 +7,6 @@ from torch import nn
 from collections import OrderedDict
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 
-
 class LayerNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-12):
         """Construct a layernorm module in the TF style (epsilon inside the square root).
@@ -115,7 +114,7 @@ class visual_prompt(nn.Module):
         self.T = T
         assert sim_head in ["meanP", "LSTM", "Transf", "Conv_1D", "Transf_cls"]
 
-        if self.sim_header == "LSTM" or self.sim_header == "Transf" or self.sim_header == "Transf_cls" or self.sim_header == "Conv_1D" :
+        if self.sim_header == "LSTM" or self.sim_header == "Transf" or self.sim_header == "Transf_cls" or self.sim_header == "Conv_1D":
             embed_dim = clip_state_dict["text_projection"].shape[1]
 
             if double_embedding:

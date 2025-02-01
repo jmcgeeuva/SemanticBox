@@ -196,25 +196,30 @@ class GroupNormalize(object):
     def __init__(self, mean, std):
         self.mean = mean
         self.std = std
+        self.norm = torchvision.transforms.Normalize(mean=mean, std=std)
 
     def normalize(self, tensor):
-        mean = self.mean * (tensor.size()[0]//len(self.mean))
-        std = self.std * (tensor.size()[0]//len(self.std))
-        mean = torch.Tensor(mean)
-        std = torch.Tensor(std)
+        # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
+        # mean = self.mean * (tensor.size()[0]//len(self.mean))
+        # std = self.std * (tensor.size()[0]//len(self.std))
+        # mean = torch.Tensor(mean)
+        # std = torch.Tensor(std)
 
-        if len(tensor.size()) == 3:
-            # for 3-D tensor (T*C, H, W)
-            tensor.sub_(mean[:, None, None]).div_(std[:, None, None])
-        elif len(tensor.size()) == 4:
-            # for 4-D tensor (C, T, H, W)
-            tensor.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
-        return tensor
+        # if len(tensor.size()) == 3:
+        #     # for 3-D tensor (T*C, H, W)
+        #     tensor.sub_(mean[:, None, None]).div_(std[:, None, None])
+        # elif len(tensor.size()) == 4:
+        #     # for 4-D tensor (C, T, H, W)
+        #     tensor.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
+        # return tensor
+        return self.norm(tensor)
 
     def __call__(self, data):
         tensor, img_mask = data['video'], data['mask']
+        tensor = tensor.view((-1,8,3)+tensor.size()[-2:])
+        img_mask = img_mask.view((-1,8,3)+img_mask.size()[-2:])
         img_group = self.normalize(tensor)
-        img_mask = self.normalize(img_mask)
+        # Removed for masks because it hurt the accuracy by blurring out the mask
         return {'video': img_group, 'mask': img_mask}
 
 
@@ -455,7 +460,6 @@ class Stack(object):
                 # plt.imshow(rst[:,:,3:6])
                 # plt.show()
                 return rst
-        return img_group
 
 class Stack1(object):
 
@@ -527,7 +531,7 @@ class GroupRandomColorJitter(object):
         img_group, img_mask = data['video'], data['mask']
         v = random.random()
         img_group = self.random_color_jitter(img_group, v)
-        img_mask = self.random_color_jitter(img_mask, v)
+        # img_mask = self.random_color_jitter(img_mask, v)
         return {'video': img_group, 'mask': img_mask}
 
 class GroupRandomGrayscale(object):
@@ -548,7 +552,7 @@ class GroupRandomGrayscale(object):
        
         v = random.random()
         img_group = self.random_grayscale(img_group, v)
-        img_mask = self.random_grayscale(img_mask, v)
+        # img_mask = self.random_grayscale(img_mask, v)
         return {'video': img_group, 'mask': img_mask}
 
 class GroupGaussianBlur(object):
@@ -567,7 +571,7 @@ class GroupGaussianBlur(object):
         v = random.random()
         sigma_rand = random.random()
         img_group = self.gaussian_blur(img_group, v, sigma_rand)
-        # img_mask = self.gaussian_blur(img_mask, v, sigma_rand)
+        img_mask = self.gaussian_blur(img_mask, v, sigma_rand)
         return {'video': img_group, 'mask': img_mask}
 
 class GroupSolarization(object):

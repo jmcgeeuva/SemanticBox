@@ -40,6 +40,12 @@ class ImageCLIP(nn.Module):
     def forward(self, image):
         return self.model.encode_image(image)
 
+def calculate_similarity(logits_per_image, b, num_text_aug):
+    similarity = logits_per_image.view(b, num_text_aug, -1).softmax(dim=-1)
+    similarity = similarity.mean(dim=1, keepdim=False)
+    return similarity
+
+
 def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug):
     model.eval()
     fusion_model.eval()
@@ -65,13 +71,13 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             b, t, c, h, w = image.size()
             class_id = class_id.to(device)
             image_input = image.to(device).view(-1, c, h, w)
-            image_features = model.encode_image(image_input).view(b, t, -1)
+            image_features = model.encode_image(image_input)
+            image_features = image_features.view(b,t,-1)
             image_features = fusion_model(image_features)
             image_features /= image_features.norm(dim=-1, keepdim=True)
             text_features /= text_features.norm(dim=-1, keepdim=True)
-            similarity = (100.0 * image_features @ text_features.T)
-            similarity = similarity.view(b, num_text_aug, -1).softmax(dim=-1)
-            similarity = similarity.mean(dim=1, keepdim=False)
+            logits_per_image = (100.0 * image_features @ text_features.T)
+            similarity = calculate_similarity(logits_per_image, b, num_text_aug)
             values_1, indices_1 = similarity.topk(1, dim=-1)
             values_5, indices_5 = similarity.topk(5, dim=-1)
             num += b
