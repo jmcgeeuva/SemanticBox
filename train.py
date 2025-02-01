@@ -166,10 +166,10 @@ def train_classifier(start_epoch,
                                 curr_lambda = lambdas[idx]
                                 token = texts[idx]
 
-                                video_tensor = videos.view(-1,c,h,w )
-                                image_embedding = model_image(videos[idx])
+                                # video_tensor = videos.view(-1,c,h,w )
+                                # image_embedding = model_image(videos[idx])
 
-                                res, text_embedding, _ = promptCrit(curr_image, curr_mask, curr_lambda, token)
+                                res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
                                 image_list.append(image_embedding)
                                 
                                 text_list.append(text_embedding[0])
