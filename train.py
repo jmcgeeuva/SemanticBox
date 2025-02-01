@@ -29,7 +29,7 @@ from prompt import PromptLoss, TextCLIP, ImageCLIP
 from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
-# from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
+from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 import torch
 
@@ -51,6 +51,7 @@ def train_classifier(start_epoch,
                      text_dict,
                      model_image, 
                      model_text, 
+                     model_stan,
                      fusion_model, 
                      train_loader, 
                      val_loader, 
@@ -66,42 +67,14 @@ def train_classifier(start_epoch,
     cross_entropy = nn.CrossEntropyLoss()
     clamp_with_grad = ClampWithGrad.apply
 
-    ##################################################
-    # e_dim = perceptor.quantize.e_dim
-    # n_toks = perceptor.quantize.n_e
-    # vqgan_weights = perceptor.quantize.embedding.weight
-    # z_min = vqgan_weights.min(dim=0).values[None, :, None, None]
-    # z_max = vqgan_weights.max(dim=0).values[None, :, None, None]
-    
-    # one_hot = F.one_hot(torch.randint(n_toks, [1 * 1], device=device), n_toks).float()
-    # z = one_hot @ vqgan_weights
-    # z = z.view([-1, toksY, toksX, e_dim]).permute(0, 3, 1, 2)
-    # z = torch.rand_like(z)*2
-    # z_orig = z.clone()
-    # z.requires_grad_(True)
-    ##################################################
-
     ################### Train Classifier ####################################
     scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, config.solver.epochs):
         model_image.train()
         model_text.train()
         fusion_model.train()
+        model_stan.train()
         
-        ###########################################################################
-        # x = rand_vqgan_weights.movedim(1, 3)
-        # codebook = vqgan_model.quantize.embedding.weight
-        
-        # # vector_quantize
-        # d = x.pow(2).sum(dim=-1, keepdim=True) + codebook.pow(2).sum(dim=1) - 2 * x @ codebook.T
-        # indices = d.argmin(-1)
-        # x_q = F.one_hot(indices, codebook.shape[0]).to(d.dtype) @ codebook
-        # rand_vqgan_weights_q = replace_grad(x_q, x).movedim(3, 1)
-
-        # # clamp the gradient between the minimum and maximum weights of the original
-        # out = clamp_with_grad(vqgan_model.decode(rand_vqgan_weights_q).add(1).div(2), 0, 1)
-        ###########################################################################
-
         running_loss_all = 0
         running_kl = 0
         running_ce = 0
@@ -200,14 +173,17 @@ def train_classifier(start_epoch,
 
                 logit_scale = perceptor.logit_scale.exp()
                 logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
-                
+
+
                 if lambda_ce != 0:
+                    stan_videos = videos.permute(0, 2, 1, 3, 4)
+                    stan_output = model_stan(stan_videos)
                     text_inputs = classes.to(device)
                     text_features2 = perceptor.encode_text(text_inputs)
                     logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
                     similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
                     list_id = list_id.to(device)
-                    ce_loss = cross_entropy(similarity, list_id)
+                    ce_loss = cross_entropy((similarity+stan_output)/2, list_id)
 
 
                 ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
@@ -234,20 +210,12 @@ def train_classifier(start_epoch,
 
             if device == "cpu":
                 scaler.step(optimizer)
-                # optimizer.step()
             else:
                 convert_models_to_fp32(perceptor)
                 scaler.step(optimizer)
-                # optimizer.step()
                 clip.model.convert_weights(perceptor)
 
             scaler.update()
-            # if kkk == 290:
-            #     print(sum(lossAll), len(lossAll))
-            #     for name, param in perceptor.named_parameters():
-            #         if param.grad is not None:
-            #             print(f"Layer: {name} | Grad Norm: {param.grad.norm().item()}")
-            #             break
 
         if epoch % config.logging.eval_freq == 0:  # and epoch>0
             prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
@@ -320,9 +288,10 @@ def main():
     fusion_model = visual_prompt(config.network.sim_header,clip_state_dict,config.data.num_segments)
     model_text = TextCLIP(perceptor)
     model_image = ImageCLIP(perceptor)
-    # model_stan = stanet_af(layers=[2, 2, 2, 2], in_channels=2, num_classes=embed_dim, k=2, features=16)
+    model_stan = stanet_af(layers=[2, 2, 2, 2], in_channels=3, num_classes=6, k=2, features=16)
     model_text = torch.nn.DataParallel(model_text).cuda()
     model_image = torch.nn.DataParallel(model_image).cuda()
+    model_stan = torch.nn.DataParallel(model_stan).cuda()
     fusion_model = torch.nn.DataParallel(fusion_model).cuda()
     wandb.watch(perceptor)
     wandb.watch(fusion_model)
@@ -449,6 +418,7 @@ def main():
                      text_dict = text_dict,
                      model_image = model_image, 
                      model_text = model_text, 
+                     model_stan = model_stan,
                      fusion_model = fusion_model, 
                      train_loader = train_loader, 
                      val_loader = val_loader, 
