@@ -57,12 +57,15 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
         text_inputs = classes.to(device)
         text_features = model.encode_text(text_inputs)
         for iii, data in enumerate(tqdm(val_loader)):
-            if len(data) > 2:
-                image, mask, class_id = data
-                if mask:
-                    aug_masks, lambdas = mask
-                    aug_masks = aug_masks.to(device)
-                    lambdas = lambdas.to(device)
+            if len(data) > 3:
+                image, aug_masks, lambdas, class_id = data
+                aug_masks = aug_masks.to(device)
+                lambdas = lambdas.to(device)
+            elif len(data) > 2:
+                image, orig_videos, class_id = data
+                orig_videos = orig_videos.to(device)
+                class_id = class_id.to(device)
+                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
             else:
                 image, class_id = data
                 image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
@@ -78,6 +81,16 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             text_features /= text_features.norm(dim=-1, keepdim=True)
             logits_per_image = (100.0 * image_features @ text_features.T)
             similarity = calculate_similarity(logits_per_image, b, num_text_aug)
+
+            if config.data.use_orig:
+                image_features = model.encode_image(orig_videos)
+                image_features = image_features.view(b,t,-1)
+                image_features = fusion_model(image_features)
+                image_features /= image_features.norm(dim=-1, keepdim=True)
+                text_features /= text_features.norm(dim=-1, keepdim=True)
+                logits_per_image = (100.0 * image_features @ text_features.T)
+                similarity = similarity + calculate_similarity(logits_per_image, b, num_text_aug)
+
             values_1, indices_1 = similarity.topk(1, dim=-1)
             values_5, indices_5 = similarity.topk(5, dim=-1)
             num += b
