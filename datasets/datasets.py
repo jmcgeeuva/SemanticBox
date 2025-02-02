@@ -130,7 +130,6 @@ class Action_DATASETS(data.Dataset):
         self.target_transform = target_transform
 
     def _load_image(self, directory, idx):
-
         return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
     
     def _load_teacher_box(self, annotation, idx):
@@ -319,7 +318,7 @@ class Action_DATASETS_orig(data.Dataset):
                  image_tmpl='img_{:05d}.jpg', transform=None,
                  random_shift=True, test_mode=False, index_bias=1, 
                  height=224, width=224, label_box=False, debug=False,
-                 bounding_boxes=False):
+                 bounding_boxes=True):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -476,26 +475,33 @@ class Action_DATASETS_orig(data.Dataset):
             images.extend(seg_imgs)
             bbs.append(bb)
 
-        if self.bounding_boxes:
-            cropped_images = []
-            for i, (x0, y0, x1, y1) in enumerate(bbs):
-                cropped_images.append(
-                    images[i].crop((
-                        int(np.floor(x0)), 
-                        int(np.ceil (y0)), 
-                        int(np.floor(x1)), 
-                        int(np.ceil (y1))
-                    ))
-                )
+        cropped_images = []
+        for i, (x0, y0, x1, y1) in enumerate(bbs):
+            cropped_images.append(
+                images[i].crop((
+                    int(np.floor(x0)), 
+                    int(np.ceil (y0)), 
+                    int(np.floor(x1)), 
+                    int(np.ceil (y1))
+                ))
+            )
 
-            process_data = self.transform(cropped_images)
-        else: 
-            process_data = self.transform(images)
+        # data = {'video': images, 'mask': image_masks}
+        # data = self.image_transform(data)
+        # process_data, image_masks = data['video'], data['mask']
 
-        if self.debug:
-            return process_data, record.label, (images, bbs)
-        else:
-            return process_data, record.label
+        data = {'video': cropped_images, 'mask': None}
+        data = self.transform(data)
+        process_data, image_masks = data['video'], data['mask']
+        
+        data = {'video': images, 'mask': None}
+        data = self.transform(data)
+        images, image_masks = data['video'], data['mask']
+
+        # if self.debug:
+        return process_data, images, bbs, record.label
+        # else:
+        #     return process_data, record.label
 
     def __len__(self):
         return len(self.video_list)

@@ -331,51 +331,91 @@ def main():
                                         cutn=1, 
                                         cut_pow=1., 
                                         noise_fac = 0.1)
-    def collate_fn(batch):
-        videos, masks, lambda_val, labels = zip(*batch)
-        # Check the labels for bb
-        videos, labels = torch.stack(videos), torch.tensor(labels)
-        lambda_val = torch.tensor(lambda_val)
-        masks = torch.stack(masks, dim=0)
-        # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-        # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
-        masks = masks.squeeze(dim=1)
-        videos = videos.squeeze(dim=1)
-        data = {'videos': videos, 'masks': masks}
-        iii, aug_masks = mask_transform(data)
-        # iii = iii.squeeze()
-        return videos, (aug_masks, lambda_val), labels
+    if not config.data.use_orig:
+        def collate_fn(batch):
+            videos, masks, lambda_val, labels = zip(*batch)
+            # Check the labels for bb
+            videos, labels = torch.stack(videos), torch.tensor(labels)
+            lambda_val = torch.tensor(lambda_val)
+            masks = torch.stack(masks, dim=0)
+            # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
+            masks = masks.squeeze(dim=1)
+            videos = videos.squeeze(dim=1)
+            data = {'videos': videos, 'masks': masks}
+            iii, aug_masks = mask_transform(data)
+            # iii = iii.squeeze()
+            return videos, aug_masks, lambda_val, labels
 
-    train_data = Action_DATASETS(
-                    config.data.train_list,
-                    config.data.label_list,
-                    num_segments=config.data.num_segments,
-                    image_tmpl=config.data.image_tmpl,
-                    random_shift=config.data.random_shift,
-                    image_transform=transform_train)
-    train_loader = DataLoader(
-                    train_data,
-                    batch_size=config.data.batch_size,
-                    num_workers=config.data.workers,
-                    shuffle=True,
-                    pin_memory=False,
-                    drop_last=True, 
-                    collate_fn=collate_fn)
-    val_data = Action_DATASETS(
-                    config.data.val_list,
-                    config.data.label_list, 
-                    random_shift=False,
-                    num_segments=config.data.num_segments,
-                    image_tmpl=config.data.image_tmpl,
-                    image_transform=transform_val)
-    val_loader = DataLoader(
-                    val_data,
-                    batch_size=config.data.batch_size,
-                    num_workers=config.data.workers,
-                    shuffle=False,
-                    pin_memory=False,
-                    drop_last=True,
-                    collate_fn=collate_fn)
+        train_data = Action_DATASETS(
+                        config.data.train_list,
+                        config.data.label_list,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        random_shift=config.data.random_shift,
+                        image_transform=transform_train)
+        train_loader = DataLoader(
+                        train_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=True,
+                        pin_memory=False,
+                        drop_last=True, 
+                        collate_fn=collate_fn)
+        val_data = Action_DATASETS(
+                        config.data.val_list,
+                        config.data.label_list, 
+                        random_shift=False,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        image_transform=transform_val)
+        val_loader = DataLoader(
+                        val_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=False,
+                        pin_memory=False,
+                        drop_last=True,
+                        collate_fn=collate_fn)
+    else:
+        def collate_fn(batch):
+            cropped_videos, images, bbs, labels = zip(*batch)
+            # Check the labels for bb
+            cropped_videos = torch.stack(cropped_videos) 
+            images = torch.stack(images) 
+            labels = torch.tensor(labels)
+            return cropped_videos, images, labels
+
+        train_data = Action_DATASETS_orig(
+                        config.data.train_list,
+                        config.data.label_list,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        random_shift=config.data.random_shift,
+                        transform=transform_train)
+        train_loader = DataLoader(
+                        train_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=True,
+                        pin_memory=False,
+                        drop_last=True, 
+                        collate_fn=collate_fn)
+        val_data = Action_DATASETS_orig(
+                        config.data.val_list,
+                        config.data.label_list, 
+                        random_shift=False,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        transform=transform_val)
+        val_loader = DataLoader(
+                        val_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=False,
+                        pin_memory=False,
+                        drop_last=True,
+                        collate_fn=collate_fn)
 
 
     if device == "cpu":
