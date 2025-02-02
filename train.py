@@ -82,7 +82,7 @@ def train_classifier(start_epoch,
     ##################################################
 
     ################### Train Classifier ####################################
-    scaler = torch.cuda.amp.GradScaler()
+    # scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, config.solver.epochs):
         model_image.train()
         model_text.train()
@@ -113,6 +113,19 @@ def train_classifier(start_epoch,
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
+            if len(data) > 3:
+                videos, aug_masks, lambdas, list_id = data
+                aug_masks = aug_masks.to(device)
+                lambdas = lambdas.to(device)
+            elif len(data) > 2:
+                videos, orig_videos, list_id = data
+                orig_videos = orig_videos.to(device)
+                list_id = list_id.to(device)
+                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            else:
+                videos, list_id = data
+                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+
             if len(data) > 2:
                 videos, masks, list_id = data
                 if masks:
@@ -133,10 +146,10 @@ def train_classifier(start_epoch,
 
 
             ############## Calculate explainability loss between attn and mask ###########
-            with torch.autocast(device_type=device):
-                # run through the prompt model and get the new results from the prompts
+            # run through the prompt model and get the new results from the prompts
+            if not config.data.use_orig:
                 lossAll = []
-                per_frame = False
+                # per_frame = False
                 loop_list = True
                 text_list = []
                 image_list = []
@@ -148,32 +161,32 @@ def train_classifier(start_epoch,
                             # find the loss for this specific bounding box
                             prompt_idx = int(label)
                             crit = criterion_list[prompt_idx]
-                            if per_frame:
-                                subloss = []
-                                # print(videos[idx].shape, aug_masks[idx].shape, lambdas[idx].shape)
-                                # for each frame (in a group of 8 frames), the given mask, and its lambda
-                                for curr_iter, (curr_image, curr_mask, curr_lambda) in enumerate(zip(videos[idx], aug_masks[idx], lambdas[idx])):
-                                    # Needs to be 1x3x224x224 for curr_image
-                                    curr_image = curr_image.unsqueeze(0)
-                                    # print(curr_image.shape, curr_mask.shape, curr_lambda.shape)
-                                    # raise ValueError("test")
-                                    res = crit(curr_image, curr_mask, curr_lambda)
-                                    subloss.append(res)
-                                lossAll.append(sum(subloss)/len(subloss))
-                            else: 
-                                curr_image = videos[idx]
-                                curr_mask = aug_masks[idx]
-                                curr_lambda = lambdas[idx]
-                                token = texts[idx]
+                            # if per_frame:
+                            #     subloss = []
+                            #     # print(videos[idx].shape, aug_masks[idx].shape, lambdas[idx].shape)
+                            #     # for each frame (in a group of 8 frames), the given mask, and its lambda
+                            #     for curr_iter, (curr_image, curr_mask, curr_lambda) in enumerate(zip(videos[idx], aug_masks[idx], lambdas[idx])):
+                            #         # Needs to be 1x3x224x224 for curr_image
+                            #         curr_image = curr_image.unsqueeze(0)
+                            #         # print(curr_image.shape, curr_mask.shape, curr_lambda.shape)
+                            #         # raise ValueError("test")
+                            #         res = crit(curr_image, curr_mask, curr_lambda)
+                            #         subloss.append(res)
+                            #     lossAll.append(sum(subloss)/len(subloss))
+                            # else: 
+                            curr_image = videos[idx]
+                            curr_mask = aug_masks[idx]
+                            curr_lambda = lambdas[idx]
+                            token = texts[idx]
 
-                                # video_tensor = videos.view(-1,c,h,w )
-                                # image_embedding = model_image(videos[idx])
+                            # video_tensor = videos.view(-1,c,h,w )
+                            # image_embedding = model_image(videos[idx])
 
-                                res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
-                                image_list.append(image_embedding)
-                                
-                                text_list.append(text_embedding[0])
-                                lossAll.append(res)
+                            res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
+                            image_list.append(image_embedding)
+                            
+                            text_list.append(text_embedding[0])
+                            lossAll.append(res)
                         loss_all = (sum(lossAll)/len(lossAll))
                         text_embedding = torch.stack(text_list)
                         image_embedding = torch.stack(image_list)
@@ -186,68 +199,76 @@ def train_classifier(start_epoch,
                         print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
                         loss_all = promptCrit(videos, aug_masks, lambdas, texts)
                         raise ValueError("test")
-                        
-                if not (loop_list and not per_frame) or lambda_bb == 0:
-                    video_tensor = videos.view(-1,c,h,w )
-                    image_embedding = model_image(video_tensor)
-                    image_embedding = image_embedding.view(b,t,-1)
-                    image_embedding = fusion_model(image_embedding)
+            else:
+                video_tensor = videos.view(-1,c,h,w )
+                image_embedding = model_image(video_tensor)
+                image_embedding = image_embedding.view(b,t,-1)
+                image_embedding = fusion_model(image_embedding)
 
-                    text_embedding = model_text(texts)
+                video_tensor = orig_videos.view(-1,c,h,w )
+                image_emb_orig = model_image(video_tensor)
+                image_emb_orig = image_emb_orig.view(b,t,-1)
+                image_emb_orig = fusion_model(image_emb_orig)
 
-                if config.network.fix_text:
-                    text_embedding.detach_()
+                text_embedding = model_text(texts)
 
-                logit_scale = perceptor.logit_scale.exp()
-                logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
-                
-                if lambda_ce != 0:
-                    text_inputs = classes.to(device)
-                    text_features2 = perceptor.encode_text(text_inputs)
-                    logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
-                    similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
-                    list_id = list_id.to(device)
-                    ce_loss = cross_entropy(similarity, list_id)
+            if config.network.fix_text:
+                text_embedding.detach_()
+
+            logit_scale = perceptor.logit_scale.exp()
+            logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
+            if config.data.use_orig:
+                logits_per_image_orig, logits_per_text_orig = create_logits(image_emb_orig,text_embedding,logit_scale)
+            
+            if lambda_ce != 0:
+                text_inputs = classes.to(device)
+                text_features2 = perceptor.encode_text(text_inputs)
+                logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
+                logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
+                similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
+                similarity_orig = calculate_similarity(image_emb_orig, b, num_text_aug)
+                list_id = list_id.to(device)
+                ce_loss = cross_entropy(similarity+similarity_orig, list_id)
 
 
-                ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
-                loss_imgs = loss_img(logits_per_image,ground_truth)
-                loss_texts = loss_txt(logits_per_text,ground_truth)
+            ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
+            loss_imgs = loss_img(logits_per_image,ground_truth)
+            loss_texts = loss_txt(logits_per_text,ground_truth)
 
+            if config.data.use_orig:
+                loss_imgs_orig = loss_img(logits_per_image_orig, ground_truth)
+                loss_texts_orig = loss_txt(logits_per_text_orig,ground_truth)
+
+                kl_loss = (loss_imgs + loss_texts)/2 + (loss_imgs_orig + loss_texts_orig)/2
+            else:
                 kl_loss = (loss_imgs + loss_texts)/2
-                total_loss = kl_loss
-                running_kl += kl_loss.item()
-                if lambda_bb > 0:
-                    total_loss += lambda_bb*loss_all
-                    running_loss_all += loss_all.item()
-                if lambda_ce > 0:
-                    total_loss += lambda_ce*ce_loss
-                    running_ce += ce_loss.item()
-                running_total += total_loss.item()
+            total_loss = kl_loss
+            running_kl += kl_loss.item()
+            if lambda_bb > 0:
+                total_loss += lambda_bb*loss_all
+                running_loss_all += loss_all.item()
+            if lambda_ce > 0:
+                total_loss += lambda_ce*ce_loss
+                running_ce += ce_loss.item()
+            running_total += total_loss.item()
 
             wandb.log({"train_total_loss": total_loss})
             wandb.log({"train_loss_imgs": loss_imgs})
             wandb.log({"train_loss_texts": loss_texts})
             wandb.log({"lr": optimizer.param_groups[0]['lr']})
-            scaler.scale(total_loss).backward()
+            total_loss.backward()
             # print(f'Iter {kkk}: {total_loss.item()}')
 
             if device == "cpu":
-                scaler.step(optimizer)
+                optimizer.step()
                 # optimizer.step()
             else:
                 convert_models_to_fp32(perceptor)
-                scaler.step(optimizer)
+                optimizer.step()
                 # optimizer.step()
                 clip.model.convert_weights(perceptor)
 
-            scaler.update()
-            # if kkk == 290:
-            #     print(sum(lossAll), len(lossAll))
-            #     for name, param in perceptor.named_parameters():
-            #         if param.grad is not None:
-            #             print(f"Layer: {name} | Grad Norm: {param.grad.norm().item()}")
-            #             break
+            # scaler.update()
 
         if epoch % config.logging.eval_freq == 0:  # and epoch>0
             prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
