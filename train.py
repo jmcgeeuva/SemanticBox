@@ -41,6 +41,45 @@ def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
         res[label_num] = PromptLoss(prompt, perceptor, replace_grad).to(device)
     return res
     
+def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model):
+    lossAll = []
+    # per_frame = False
+    loop_list = True
+    text_list = []
+    image_list = []
+    if len(criterion_list) > 0:
+        # for each label in the list and for each invidividual video (there are 16 of them)
+        if loop_list:
+            videos = videos.reshape(b,t,c,h,w)
+            for idx, label in enumerate(list_id.detach().cpu()):
+                # find the loss for this specific bounding box
+                prompt_idx = int(label)
+                crit = criterion_list[prompt_idx]
+                curr_image = videos[idx]
+                curr_mask = aug_masks[idx]
+                curr_lambda = lambdas[idx]
+                token = texts[idx]
+    
+                res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
+                image_list.append(image_embedding)
+    
+                text_list.append(text_embedding[0])
+                lossAll.append(res)
+            loss_all = (sum(lossAll)/len(lossAll))
+            text_embedding = torch.stack(text_list)
+            image_embedding = torch.stack(image_list)
+            image_embedding = image_embedding.view(b,t,-1)
+            image_embedding = fusion_model(image_embedding)
+            # print(sum(lossAll), len(lossAll))
+        # else:
+        #     # give the loss function the current text to unify the two
+        #     videos = videos.reshape(b,t,c,h,w)
+        #     print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
+        #     loss_all = promptCrit(videos, aug_masks, lambdas, texts)
+        #     raise ValueError("test")
+    return loss_all, image_embedding, text_embedding
+
+
 def train_classifier(start_epoch, 
                      loss_img,
                      loss_txt,
@@ -125,16 +164,6 @@ def train_classifier(start_epoch,
             else:
                 videos, list_id = data
                 videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-
-            if len(data) > 2:
-                videos, masks, list_id = data
-                if masks:
-                    aug_masks, lambdas = masks
-                    aug_masks = aug_masks.to(device)
-                    lambdas = lambdas.to(device)
-            else:
-                videos, list_id = data
-                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
             
             b,t,c,h,w = videos.size()
             
@@ -148,57 +177,7 @@ def train_classifier(start_epoch,
             ############## Calculate explainability loss between attn and mask ###########
             # run through the prompt model and get the new results from the prompts
             if not config.data.use_orig:
-                lossAll = []
-                # per_frame = False
-                loop_list = True
-                text_list = []
-                image_list = []
-                if len(criterion_list) > 0:
-                    # for each label in the list and for each invidividual video (there are 16 of them)
-                    if loop_list:
-                        videos = videos.reshape(b,t,c,h,w)
-                        for idx, label in enumerate(list_id.detach().cpu()):
-                            # find the loss for this specific bounding box
-                            prompt_idx = int(label)
-                            crit = criterion_list[prompt_idx]
-                            # if per_frame:
-                            #     subloss = []
-                            #     # print(videos[idx].shape, aug_masks[idx].shape, lambdas[idx].shape)
-                            #     # for each frame (in a group of 8 frames), the given mask, and its lambda
-                            #     for curr_iter, (curr_image, curr_mask, curr_lambda) in enumerate(zip(videos[idx], aug_masks[idx], lambdas[idx])):
-                            #         # Needs to be 1x3x224x224 for curr_image
-                            #         curr_image = curr_image.unsqueeze(0)
-                            #         # print(curr_image.shape, curr_mask.shape, curr_lambda.shape)
-                            #         # raise ValueError("test")
-                            #         res = crit(curr_image, curr_mask, curr_lambda)
-                            #         subloss.append(res)
-                            #     lossAll.append(sum(subloss)/len(subloss))
-                            # else: 
-                            curr_image = videos[idx]
-                            curr_mask = aug_masks[idx]
-                            curr_lambda = lambdas[idx]
-                            token = texts[idx]
-
-                            # video_tensor = videos.view(-1,c,h,w )
-                            # image_embedding = model_image(videos[idx])
-
-                            res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
-                            image_list.append(image_embedding)
-                            
-                            text_list.append(text_embedding[0])
-                            lossAll.append(res)
-                        loss_all = (sum(lossAll)/len(lossAll))
-                        text_embedding = torch.stack(text_list)
-                        image_embedding = torch.stack(image_list)
-                        image_embedding = image_embedding.view(b,t,-1)
-                        image_embedding = fusion_model(image_embedding)
-                        # print(sum(lossAll), len(lossAll))
-                    else:
-                        # give the loss function the current text to unify the two
-                        videos = videos.reshape(b,t,c,h,w)
-                        print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
-                        loss_all = promptCrit(videos, aug_masks, lambdas, texts)
-                        raise ValueError("test")
+                loss_all, image_embedding, text_embedding = bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model)
             else:
                 video_tensor = videos.view(-1,c,h,w )
                 image_embedding = model_image(video_tensor)
@@ -226,7 +205,7 @@ def train_classifier(start_epoch,
                 logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
                 logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
                 similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
-                similarity_orig = calculate_similarity(image_emb_orig, b, num_text_aug)
+                similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
                 list_id = list_id.to(device)
                 ce_loss = cross_entropy(similarity+similarity_orig, list_id)
 
@@ -239,7 +218,9 @@ def train_classifier(start_epoch,
                 loss_imgs_orig = loss_img(logits_per_image_orig, ground_truth)
                 loss_texts_orig = loss_txt(logits_per_text_orig,ground_truth)
 
-                kl_loss = (loss_imgs + loss_texts)/2 + (loss_imgs_orig + loss_texts_orig)/2
+                kl_loss = (loss_imgs + loss_texts)/2
+                kl_loss_orig = ((loss_imgs_orig + loss_texts_orig)/2)
+                kl_loss = config.data.lambda_cropped*kl_loss + config.data.lambda_orig*kl_loss_orig
             else:
                 kl_loss = (loss_imgs + loss_texts)/2
             total_loss = kl_loss

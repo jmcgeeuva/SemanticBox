@@ -159,7 +159,9 @@ class GroupCenterCrop(object):
 
     def __call__(self, data):
         img_group, img_mask = data['video'], data['mask']
-        return {'video': [self.worker(img) for img in img_group], 'mask': [self.worker(img) for img in img_mask]}
+        if img_mask:
+            img_mask = [self.worker(img) for img in img_mask]
+        return {'video': [self.worker(img) for img in img_group], 'mask': img_mask}
     
 class GroupRandomHorizontalFlip(object):
     """Randomly horizontally flips the given PIL.Image with a probability of 0.5
@@ -178,7 +180,8 @@ class GroupRandomHorizontalFlip(object):
         img_group, img_mask = data['video'], data['mask']
         v = random.random()
         img_group = self.random_horizontal_flip(img_group, v)
-        img_mask = self.random_horizontal_flip(img_mask, v)
+        if img_mask:
+            img_mask = self.random_horizontal_flip(img_mask, v)
         return {'video': img_group, 'mask': img_mask}
     
 class GroupNormalize1(object):
@@ -217,8 +220,10 @@ class GroupNormalize(object):
     def __call__(self, data):
         tensor, img_mask = data['video'], data['mask']
         tensor = tensor.view((-1,8,3)+tensor.size()[-2:])
-        img_mask = img_mask.view((-1,8,3)+img_mask.size()[-2:])
         img_group = self.normalize(tensor)
+        
+        if img_mask:
+            img_mask = img_mask.view((-1,8,3)+img_mask.size()[-2:])
         # Removed for masks because it hurt the accuracy by blurring out the mask
         return {'video': img_group, 'mask': img_mask}
 
@@ -237,7 +242,9 @@ class GroupScale(object):
 
     def __call__(self, data):
         img_group, img_mask = data['video'], data['mask']
-        return {'video': [self.worker(img) for img in img_group], 'mask': [self.worker(img) for img in img_mask]}
+        if img_mask:
+            img_mask = [self.worker(img) for img in img_mask]
+        return {'video': [self.worker(img) for img in img_group], 'mask': img_mask}
 
 
 class GroupOverSample(object):
@@ -328,9 +335,10 @@ class GroupMultiScaleCrop(object):
         img_group, img_mask = data['video'], data['mask']
 
         ret_img_group = self.multiscale_crop(img_group)
-        ret_img_mask = self.multiscale_crop(img_mask)
+        if img_mask:
+            img_mask = self.multiscale_crop(img_mask)
 
-        return {'video': ret_img_group, 'mask': ret_img_mask}
+        return {'video': ret_img_group, 'mask': img_mask}
 
     def _sample_crop_size(self, im_size):
         image_w, image_h = im_size[0], im_size[1]
@@ -571,7 +579,8 @@ class GroupGaussianBlur(object):
         v = random.random()
         sigma_rand = random.random()
         img_group = self.gaussian_blur(img_group, v, sigma_rand)
-        img_mask = self.gaussian_blur(img_mask, v, sigma_rand)
+        if img_mask:
+            img_mask = self.gaussian_blur(img_mask, v, sigma_rand)
         return {'video': img_group, 'mask': img_mask}
 
 class GroupSolarization(object):
@@ -588,7 +597,8 @@ class GroupSolarization(object):
         v = random.random()
 
         img_group = self.solarization(img_group, v)
-        img_mask = self.solarization(img_mask, v)
+        if img_mask:
+            img_mask = self.solarization(img_mask, v)
         
         return {'video': img_group, 'mask': img_mask}
 
@@ -603,7 +613,8 @@ class GroupStack(object):
         img_group, img_mask = data['video'], data['mask']
 
         img_group = self.stack(img_group)
-        img_mask = self.stack(img_mask)
+        if img_mask:
+            img_mask = self.stack(img_mask)
         return {'video': img_group, 'mask': img_mask}
 
 class GroupToTorchFormatTensor(object):
@@ -615,5 +626,6 @@ class GroupToTorchFormatTensor(object):
         img_group, img_mask = data['video'], data['mask']
 
         img_group = self.to_float_tensor(img_group)
-        img_mask = self.to_float_tensor(img_mask)
+        if img_mask:
+            img_mask = self.to_float_tensor(img_mask)
         return {'video': img_group, 'mask': img_mask}

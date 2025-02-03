@@ -83,7 +83,9 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             similarity = calculate_similarity(logits_per_image, b, num_text_aug)
 
             if config.data.use_orig:
-                image_features = model.encode_image(orig_videos)
+                orig_videos = orig_videos.squeeze(dim=1)
+                image_input = orig_videos.to(device).view(-1, c, h, w)
+                image_features = model.encode_image(image_input)
                 image_features = image_features.view(b,t,-1)
                 image_features = fusion_model(image_features)
                 image_features /= image_features.norm(dim=-1, keepdim=True)
