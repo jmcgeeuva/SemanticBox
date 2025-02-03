@@ -101,6 +101,11 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
                     corr_1 += 1
                 if class_id[i] in indices_5[i]:
                     corr_5 += 1
+    
+            yhat = torch.argmax(similarity, dim=1).to(dtype=int)
+            labeled_ids.extend(yhat.tolist())
+            correct_ids.extend(class_id.tolist())
+
     top1 = float(corr_1) / num * 100
     top5 = float(corr_5) / num * 100
     wandb.log({"top1": top1})
