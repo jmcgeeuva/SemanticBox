@@ -8,7 +8,7 @@ sys.path.insert(0, "./../explain/ml-no-token-left-behind/external/tamingtransfor
 sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
 import CLIP.clip as clip
 import torch.nn as nn
-from datasets import Action_DATASETS
+from datasets import Action_DATASETS, Action_DATASETS_orig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
@@ -29,7 +29,7 @@ from sklearn.utils.multiclass import unique_labels
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
-from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
+# from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,
                           normalize=False,
@@ -115,6 +115,8 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
     corr_1 = 0
     corr_5 = 0
 
+    labeled_ids = []
+    correct_ids = []
     with torch.no_grad():
         text_inputs = classes.to(device)
         text_features = model.encode_text(text_inputs)
@@ -167,6 +169,8 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             yhat = torch.argmax(similarity, dim=1).to(dtype=int)
             labeled_ids.extend(yhat.tolist())
             correct_ids.extend(class_id.tolist())
+
+    plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
 
     top1 = float(corr_1) / num * 100
     top5 = float(corr_5) / num * 100
@@ -225,11 +229,65 @@ def main():
     wandb.watch(model)
     wandb.watch(fusion_model)
 
-    val_data = Action_DATASETS(config.data.val_list, config.data.label_list, num_segments=config.data.num_segments,
+    if not config.data.use_orig:
+        mask_transform = get_mask_augmentation(cut_size=224, 
+                                            cutn=1, 
+                                            cut_pow=1., 
+                                            noise_fac = 0.1)
+        def collate_fn(batch):
+            videos, masks, lambda_val, labels = zip(*batch)
+            # Check the labels for bb
+            videos, labels = torch.stack(videos), torch.tensor(labels)
+            lambda_val = torch.tensor(lambda_val)
+            masks = torch.stack(masks, dim=0)
+            # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
+            masks = masks.squeeze(dim=1)
+            videos = videos.squeeze(dim=1)
+            data = {'videos': videos, 'masks': masks}
+            iii, aug_masks = mask_transform(data)
+            # iii = iii.squeeze()
+            return videos, aug_masks, lambda_val, labels
+
+        val_data = Action_DATASETS(
+                        config.data.val_list,
+                        config.data.label_list, 
+                        random_shift=False,
+                        num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
-                        transform=transform_val, random_shift=config.random_shift)
-    val_loader = DataLoader(val_data, batch_size=config.data.batch_size, num_workers=config.data.workers, shuffle=False,
-                            pin_memory=True, drop_last=True)
+                        image_transform=transform_val)
+        val_loader = DataLoader(
+                        val_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=False,
+                        pin_memory=False,
+                        drop_last=True,
+                        collate_fn=collate_fn)
+    else:
+        def collate_fn(batch):
+            cropped_videos, images, bbs, labels = zip(*batch)
+            # Check the labels for bb
+            cropped_videos = torch.stack(cropped_videos) 
+            images = torch.stack(images) 
+            labels = torch.tensor(labels)
+            return cropped_videos, images, labels
+
+        val_data = Action_DATASETS_orig(
+                        config.data.val_list,
+                        config.data.label_list, 
+                        random_shift=False,
+                        num_segments=config.data.num_segments,
+                        image_tmpl=config.data.image_tmpl,
+                        transform=transform_val)
+        val_loader = DataLoader(
+                        val_data,
+                        batch_size=config.data.batch_size,
+                        num_workers=config.data.workers,
+                        shuffle=False,
+                        pin_memory=False,
+                        drop_last=True,
+                        collate_fn=collate_fn)
 
     if device == "cpu":
         model_text.float()
@@ -251,7 +309,7 @@ def main():
         else:
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
-    classes, num_text_aug, text_dict = text_prompt(val_data)
+    classes, num_text_aug, text_dict = text_prompt(val_data, config.prompt)
 
     best_prec1 = 0.0
     prec1 = validate(start_epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug)
