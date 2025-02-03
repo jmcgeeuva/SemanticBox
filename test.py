@@ -120,24 +120,11 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
     with torch.no_grad():
         text_inputs = classes.to(device)
         text_features = model.encode_text(text_inputs)
-        for iii, data in enumerate(tqdm(val_loader)):
-            if len(data) > 3:
-                image, aug_masks, lambdas, class_id = data
-                aug_masks = aug_masks.to(device)
-                lambdas = lambdas.to(device)
-            elif len(data) > 2:
-                image, orig_videos, class_id = data
-                orig_videos = orig_videos.to(device)
-                class_id = class_id.to(device)
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
-            else:
-                image, class_id = data
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
-
-            # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
-            b, t, c, h, w = image.size()
+        for iii, (cropped_videos, videos, class_id) in enumerate(tqdm(val_loader)):
+            videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            b, t, c, h, w = videos.size()
             class_id = class_id.to(device)
-            image_input = image.to(device).view(-1, c, h, w)
+            image_input = videos.to(device).view(-1, c, h, w)
             image_features = model.encode_image(image_input)
             image_features = image_features.view(b,t,-1)
             image_features = fusion_model(image_features)
@@ -146,9 +133,11 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             logits_per_image = (100.0 * image_features @ text_features.T)
             similarity = calculate_similarity(logits_per_image, b, num_text_aug)
 
-            if config.data.cropped.use and False:
-                orig_videos = orig_videos.squeeze(dim=1)
-                image_input = orig_videos.to(device).view(-1, c, h, w)
+            if config.data.cropped.use and config.data.cropped.test:
+                cropped_videos = cropped_videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
+                b, t, c, h, w = cropped_videos.size()
+                cropped_videos = cropped_videos.squeeze(dim=1)
+                image_input = cropped_videos.to(device).view(-1, c, h, w)
                 image_features = model.encode_image(image_input)
                 image_features = image_features.view(b,t,-1)
                 image_features = fusion_model(image_features)
@@ -229,65 +218,65 @@ def main():
     wandb.watch(model)
     wandb.watch(fusion_model)
 
-    if not config.data.use_orig:
-        mask_transform = get_mask_augmentation(cut_size=224, 
-                                            cutn=1, 
-                                            cut_pow=1., 
-                                            noise_fac = 0.1)
-        def collate_fn(batch):
-            videos, masks, lambda_val, labels = zip(*batch)
-            # Check the labels for bb
-            videos, labels = torch.stack(videos), torch.tensor(labels)
-            lambda_val = torch.tensor(lambda_val)
-            masks = torch.stack(masks, dim=0)
-            # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
-            masks = masks.squeeze(dim=1)
-            videos = videos.squeeze(dim=1)
-            data = {'videos': videos, 'masks': masks}
-            iii, aug_masks = mask_transform(data)
-            # iii = iii.squeeze()
-            return videos, aug_masks, lambda_val, labels
+    # if config.data.bb.use:
+    #     mask_transform = get_mask_augmentation(cut_size=224, 
+    #                                         cutn=1, 
+    #                                         cut_pow=1., 
+    #                                         noise_fac = 0.1)
+    #     def collate_fn(batch):
+    #         videos, masks, lambda_val, labels = zip(*batch)
+    #         # Check the labels for bb
+    #         videos, labels = torch.stack(videos), torch.tensor(labels)
+    #         lambda_val = torch.tensor(lambda_val)
+    #         masks = torch.stack(masks, dim=0)
+    #         # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+    #         # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
+    #         masks = masks.squeeze(dim=1)
+    #         videos = videos.squeeze(dim=1)
+    #         data = {'videos': videos, 'masks': masks}
+    #         iii, aug_masks = mask_transform(data)
+    #         # iii = iii.squeeze()
+    #         return videos, aug_masks, lambda_val, labels
 
-        val_data = Action_DATASETS(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        image_transform=transform_val)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=False,
-                        drop_last=True,
-                        collate_fn=collate_fn)
-    else:
-        def collate_fn(batch):
-            cropped_videos, images, bbs, labels = zip(*batch)
-            # Check the labels for bb
-            cropped_videos = torch.stack(cropped_videos) 
-            images = torch.stack(images) 
-            labels = torch.tensor(labels)
-            return cropped_videos, images, labels
+    #     val_data = Action_DATASETS(
+    #                     config.data.val_list,
+    #                     config.data.label_list, 
+    #                     random_shift=False,
+    #                     num_segments=config.data.num_segments,
+    #                     image_tmpl=config.data.image_tmpl,
+    #                     image_transform=transform_val)
+    #     val_loader = DataLoader(
+    #                     val_data,
+    #                     batch_size=config.data.batch_size,
+    #                     num_workers=config.data.workers,
+    #                     shuffle=False,
+    #                     pin_memory=False,
+    #                     drop_last=True,
+    #                     collate_fn=collate_fn)
+    # else:
+    def collate_fn(batch):
+        cropped_videos, images, bbs, labels = zip(*batch)
+        # Check the labels for bb
+        cropped_videos = torch.stack(cropped_videos) 
+        images = torch.stack(images) 
+        labels = torch.tensor(labels)
+        return cropped_videos, images, labels
 
-        val_data = Action_DATASETS_orig(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        transform=transform_val)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=False,
-                        drop_last=True,
-                        collate_fn=collate_fn)
+    val_data = Action_DATASETS_orig(
+                    config.data.val_list,
+                    config.data.label_list, 
+                    random_shift=False,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    transform=transform_val)
+    val_loader = DataLoader(
+                    val_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=False,
+                    pin_memory=False,
+                    drop_last=True,
+                    collate_fn=collate_fn)
 
     if device == "cpu":
         model_text.float()

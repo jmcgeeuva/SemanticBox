@@ -199,23 +199,21 @@ class GroupNormalize(object):
     def __init__(self, mean, std):
         self.mean = mean
         self.std = std
-        self.norm = torchvision.transforms.Normalize(mean=mean, std=std)
+        # self.norm = torchvision.transforms.Normalize(mean=mean, std=std)
 
     def normalize(self, tensor):
-        # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
-        # mean = self.mean * (tensor.size()[0]//len(self.mean))
-        # std = self.std * (tensor.size()[0]//len(self.std))
-        # mean = torch.Tensor(mean)
-        # std = torch.Tensor(std)
+        mean = self.mean * (tensor.size()[0]//len(self.mean))
+        std = self.std * (tensor.size()[0]//len(self.std))
+        mean = torch.Tensor(mean)
+        std = torch.Tensor(std)
 
-        # if len(tensor.size()) == 3:
-        #     # for 3-D tensor (T*C, H, W)
-        #     tensor.sub_(mean[:, None, None]).div_(std[:, None, None])
-        # elif len(tensor.size()) == 4:
-        #     # for 4-D tensor (C, T, H, W)
-        #     tensor.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
-        # return tensor
-        return self.norm(tensor)
+        if len(tensor.size()) == 3:
+            # for 3-D tensor (T*C, H, W)
+            tensor.sub_(mean[:, None, None]).div_(std[:, None, None])
+        elif len(tensor.size()) == 4:
+            # for 4-D tensor (C, T, H, W)
+            tensor.sub_(mean[:, None, None, None]).div_(std[:, None, None, None])
+        return tensor
 
     def __call__(self, data):
         tensor, img_mask = data['video'], data['mask']

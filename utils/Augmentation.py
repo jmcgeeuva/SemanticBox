@@ -67,10 +67,17 @@ def get_mask_augmentation(cut_size, cutn, cut_pow=1., noise_fac = 0.1):
     return torchvision.transforms.Compose([unique])
 
 def get_augmentation(training, config):
-    input_mean=[0.5, 0.5, 0.5]
-    input_std=[0.5, 0.5, 0.5]
-    # input_mean = [0.48145466, 0.4578275, 0.40821073]
-    # input_std = [0.26862954, 0.26130258, 0.27577711]
+    # input_mean=[0.5, 0.5, 0.5]
+    # input_std=[0.5, 0.5, 0.5]
+    if config.use_calc_norm:
+        input_mean = [132.08166365255482, 124.71475878117573, 127.54048953299746]
+        input_mean = [i/max(input_mean) for i in input_mean]
+        input_std = [72.90140388137166, 73.754373651945, 75.68306417739981]
+        input_std = [i/max(input_std) for i in input_std]
+        print(input_mean, input_std)
+    else:
+        input_mean = [0.48145466, 0.4578275, 0.40821073]
+        input_std = [0.26862954, 0.26130258, 0.27577711]
     scale_size = config.data.input_size * 256 // 224
     if training:
         unique = torchvision.transforms.Compose([

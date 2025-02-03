@@ -131,7 +131,7 @@ def train_classifier(start_epoch,
             optimizer.zero_grad()
 
             cropped_videos = cropped_videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
-            videos = videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
+            videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
             b,t,c,h,w = cropped_videos.size()
             text_id = numpy.random.randint(num_text_aug,size=len(list_id))
             texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
@@ -152,6 +152,10 @@ def train_classifier(start_epoch,
             logit_scale = perceptor.logit_scale.exp()
             logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
 
+            ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
+            loss_imgs = loss_img(logits_per_image,ground_truth)
+            loss_texts = loss_txt(logits_per_text,ground_truth)
+
             if config.data.cropped.use:
                 image_emb_cropped = model_image(cropped_videos)
                 image_emb_cropped = image_emb_cropped.view(b,t,-1)
@@ -159,11 +163,6 @@ def train_classifier(start_epoch,
 
                 logits_per_image_cropped, logits_per_text_cropped = create_logits(image_emb_cropped,text_embedding,logit_scale)
 
-            ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
-            loss_imgs = loss_img(logits_per_image,ground_truth)
-            loss_texts = loss_txt(logits_per_text,ground_truth)
-
-            if config.data.cropped.use:
                 loss_imgs_orig = loss_img(logits_per_image_cropped, ground_truth)
                 loss_texts_orig = loss_txt(logits_per_text_orig,ground_truth)
 
