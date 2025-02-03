@@ -29,55 +29,54 @@ from prompt import PromptLoss, TextCLIP, ImageCLIP
 from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
-# from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 import torch
 
-def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
-    # keys = sorted(list(label_names.keys()))
-    res = {}
-    for label_num, label_name in label_names:
-        prompt = f'Video of a teacher {" ".join(label_name.split("_"))}'
-        res[label_num] = PromptLoss(prompt, perceptor, replace_grad).to(device)
-    return res
+# def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
+#     # keys = sorted(list(label_names.keys()))
+#     res = {}
+#     for label_num, label_name in label_names:
+#         prompt = f'Video of a teacher {" ".join(label_name.split("_"))}'
+#         res[label_num] = PromptLoss(prompt, perceptor, replace_grad).to(device)
+#     return res
     
-def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model):
-    lossAll = []
-    # per_frame = False
-    loop_list = True
-    text_list = []
-    image_list = []
-    if len(criterion_list) > 0:
-        # for each label in the list and for each invidividual video (there are 16 of them)
-        if loop_list:
-            videos = videos.reshape(b,t,c,h,w)
-            for idx, label in enumerate(list_id.detach().cpu()):
-                # find the loss for this specific bounding box
-                prompt_idx = int(label)
-                crit = criterion_list[prompt_idx]
-                curr_image = videos[idx]
-                curr_mask = aug_masks[idx]
-                curr_lambda = lambdas[idx]
-                token = texts[idx]
+# def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model):
+#     lossAll = []
+#     # per_frame = False
+#     loop_list = True
+#     text_list = []
+#     image_list = []
+#     if len(criterion_list) > 0:
+#         # for each label in the list and for each invidividual video (there are 16 of them)
+#         if loop_list:
+#             videos = videos.reshape(b,t,c,h,w)
+#             for idx, label in enumerate(list_id.detach().cpu()):
+#                 # find the loss for this specific bounding box
+#                 prompt_idx = int(label)
+#                 crit = criterion_list[prompt_idx]
+#                 curr_image = videos[idx]
+#                 curr_mask = aug_masks[idx]
+#                 curr_lambda = lambdas[idx]
+#                 token = texts[idx]
     
-                res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
-                image_list.append(image_embedding)
+#                 res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
+#                 image_list.append(image_embedding)
     
-                text_list.append(text_embedding[0])
-                lossAll.append(res)
-            loss_all = (sum(lossAll)/len(lossAll))
-            text_embedding = torch.stack(text_list)
-            image_embedding = torch.stack(image_list)
-            image_embedding = image_embedding.view(b,t,-1)
-            image_embedding = fusion_model(image_embedding)
-            # print(sum(lossAll), len(lossAll))
-        # else:
-        #     # give the loss function the current text to unify the two
-        #     videos = videos.reshape(b,t,c,h,w)
-        #     print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
-        #     loss_all = promptCrit(videos, aug_masks, lambdas, texts)
-        #     raise ValueError("test")
-    return loss_all, image_embedding, text_embedding
+#                 text_list.append(text_embedding[0])
+#                 lossAll.append(res)
+#             loss_all = (sum(lossAll)/len(lossAll))
+#             text_embedding = torch.stack(text_list)
+#             image_embedding = torch.stack(image_list)
+#             image_embedding = image_embedding.view(b,t,-1)
+#             image_embedding = fusion_model(image_embedding)
+#             # print(sum(lossAll), len(lossAll))
+#         # else:
+#         #     # give the loss function the current text to unify the two
+#         #     videos = videos.reshape(b,t,c,h,w)
+#         #     print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
+#         #     loss_all = promptCrit(videos, aug_masks, lambdas, texts)
+#         #     raise ValueError("test")
+#     return loss_all, image_embedding, text_embedding
 
 
 def calculate_ce(device, classes, perceptor, image_embedding, b, num_text_aug, cross_entropy):
@@ -95,8 +94,8 @@ def calculate_ce(device, classes, perceptor, image_embedding, b, num_text_aug, c
 def train_classifier(start_epoch, 
                      loss_img,
                      loss_txt,
-                     criterion_list,
-                     promptCrit,
+                    #  criterion_list,
+                    #  promptCrit,
                      lr_scheduler,
                      config, 
                      text_dict,
@@ -115,21 +114,6 @@ def train_classifier(start_epoch,
     cross_entropy = nn.CrossEntropyLoss()
     clamp_with_grad = ClampWithGrad.apply
 
-    ##################################################
-    # e_dim = perceptor.quantize.e_dim
-    # n_toks = perceptor.quantize.n_e
-    # vqgan_weights = perceptor.quantize.embedding.weight
-    # z_min = vqgan_weights.min(dim=0).values[None, :, None, None]
-    # z_max = vqgan_weights.max(dim=0).values[None, :, None, None]
-    
-    # one_hot = F.one_hot(torch.randint(n_toks, [1 * 1], device=device), n_toks).float()
-    # z = one_hot @ vqgan_weights
-    # z = z.view([-1, toksY, toksX, e_dim]).permute(0, 3, 1, 2)
-    # z = torch.rand_like(z)*2
-    # z_orig = z.clone()
-    # z.requires_grad_(True)
-    ##################################################
-
     ################### Train Classifier ####################################
     # scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, config.solver.epochs):
@@ -140,22 +124,23 @@ def train_classifier(start_epoch,
         running_kl = 0
         running_ce = 0
         running_total = 0
-        for kkk,(videos, orig_videos, list_id) in enumerate(tqdm(train_loader)):
+        for kkk,(cropped_videos, videos, list_id) in enumerate(tqdm(train_loader)):
             if config.solver.type != 'monitor':
                 if (kkk+1) == 1 or (kkk+1) % 10 == 0:
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
-            videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            b,t,c,h,w = videos.size()
+            cropped_videos = cropped_videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
+            videos = videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
+            b,t,c,h,w = cropped_videos.size()
             text_id = numpy.random.randint(num_text_aug,size=len(list_id))
             texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
             
-            videos= videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
-            orig_videos = orig_videos.to(device).view(-1,c,h,w)
+            cropped_videos= cropped_videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
+            videos = videos.to(device).view(-1,c,h,w)
             texts = texts.to(device)
 
-            image_embedding = model_image(orig_videos)
+            image_embedding = model_image(videos)
             image_embedding = image_embedding.view(b,t,-1)
             image_embedding = fusion_model(image_embedding)
 
@@ -168,55 +153,48 @@ def train_classifier(start_epoch,
             logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
 
             if config.data.cropped.use:
-                image_emb_cropped = model_image(videos)
+                image_emb_cropped = model_image(cropped_videos)
                 image_emb_cropped = image_emb_cropped.view(b,t,-1)
                 image_emb_cropped = fusion_model(image_emb_cropped)
 
                 logits_per_image_cropped, logits_per_text_cropped = create_logits(image_emb_cropped,text_embedding,logit_scale)
-            
-            if config.data.ce.use:
-                ce_loss = calculate_ce(device, classes, perceptor, image_embedding, b, num_text_aug, cross_entropy)
 
-            ground_truth = torch.tensor(gen_label(list_id),dtype=image_emb_cropped.dtype,device=device)
+            ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
             loss_imgs = loss_img(logits_per_image,ground_truth)
             loss_texts = loss_txt(logits_per_text,ground_truth)
 
-            if config.data.orig.use:
-                loss_imgs_orig = loss_img(logits_per_image_orig, ground_truth)
+            if config.data.cropped.use:
+                loss_imgs_orig = loss_img(logits_per_image_cropped, ground_truth)
                 loss_texts_orig = loss_txt(logits_per_text_orig,ground_truth)
 
                 kl_loss = (loss_imgs + loss_texts)/2
-                kl_loss_orig = ((loss_imgs_orig + loss_texts_orig)/2)
-                kl_loss = config.data.cropped.lambda_val*kl_loss + config.data.orig.lambda_val*kl_loss_orig
+                kl_loss_cropped = ((loss_imgs_orig + loss_texts_orig)/2)
+                kl_loss = config.data.orig.lambda_val*kl_loss + config.data.cropped.lambda_val*kl_loss_cropped
             else:
                 kl_loss = (loss_imgs + loss_texts)/2
+            
             total_loss = kl_loss
-            running_kl += kl_loss.item()
-            if config.data.bb.use:
-                total_loss += config.data.bb.lambda_val*loss_all
-                running_loss_all += loss_all.item()
+            
             if config.data.ce.use:
+                ce_loss = calculate_ce(device, classes, perceptor, image_embedding, b, num_text_aug, cross_entropy)
                 total_loss += config.data.ce.lambda_val*ce_loss
                 running_ce += ce_loss.item()
-            running_total += total_loss.item()
+                wandb.log({"train_loss_ce": ce_loss})
 
+            running_kl += kl_loss.item()
+            running_total += total_loss.item()
             wandb.log({"train_total_loss": total_loss})
             wandb.log({"train_loss_imgs": loss_imgs})
             wandb.log({"train_loss_texts": loss_texts})
             wandb.log({"lr": optimizer.param_groups[0]['lr']})
             total_loss.backward()
-            # print(f'Iter {kkk}: {total_loss.item()}')
 
             if device == "cpu":
                 optimizer.step()
-                # optimizer.step()
             else:
                 convert_models_to_fp32(perceptor)
                 optimizer.step()
-                # optimizer.step()
                 clip.model.convert_weights(perceptor)
-
-            # scaler.update()
 
         if epoch % config.logging.eval_freq == 0:  # and epoch>0
             prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
@@ -230,6 +208,7 @@ def train_classifier(start_epoch,
         epoch_saving(epoch, perceptor, fusion_model, optimizer, filename)
         if is_best:
             best_saving(working_dir, epoch, perceptor, fusion_model, optimizer)
+
 def main():
     global args, best_prec1
     global global_step
@@ -289,7 +268,6 @@ def main():
     fusion_model = visual_prompt(config.network.sim_header,clip_state_dict,config.data.num_segments)
     model_text = TextCLIP(perceptor)
     model_image = ImageCLIP(perceptor)
-    # model_stan = stanet_af(layers=[2, 2, 2, 2], in_channels=2, num_classes=embed_dim, k=2, features=16)
     model_text = torch.nn.DataParallel(model_text).cuda()
     model_image = torch.nn.DataParallel(model_image).cuda()
     fusion_model = torch.nn.DataParallel(fusion_model).cuda()
@@ -300,91 +278,90 @@ def main():
                                         cutn=1, 
                                         cut_pow=1., 
                                         noise_fac = 0.1)
-    if not config.data.orig.use:
-        def collate_fn(batch):
-            videos, masks, lambda_val, labels = zip(*batch)
-            # Check the labels for bb
-            videos, labels = torch.stack(videos), torch.tensor(labels)
-            lambda_val = torch.tensor(lambda_val)
-            masks = torch.stack(masks, dim=0)
-            # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
-            masks = masks.squeeze(dim=1)
-            videos = videos.squeeze(dim=1)
-            data = {'videos': videos, 'masks': masks}
-            iii, aug_masks = mask_transform(data)
-            # iii = iii.squeeze()
-            return videos, aug_masks, lambda_val, labels
+    # if config.data.bb.use:
+    #     def collate_fn(batch):
+    #         videos, masks, lambda_val, labels = zip(*batch)
+    #         # Check the labels for bb
+    #         videos, labels = torch.stack(videos), torch.tensor(labels)
+    #         lambda_val = torch.tensor(lambda_val)
+    #         masks = torch.stack(masks, dim=0)
+    #         # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+    #         # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
+    #         masks = masks.squeeze(dim=1)
+    #         videos = videos.squeeze(dim=1)
+    #         data = {'videos': videos, 'masks': masks}
+    #         iii, aug_masks = mask_transform(data)
+    #         # iii = iii.squeeze()
+    #         return videos, aug_masks, lambda_val, labels
 
-        train_data = Action_DATASETS(
-                        config.data.train_list,
-                        config.data.label_list,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        random_shift=config.data.random_shift,
-                        image_transform=transform_train)
-        train_loader = DataLoader(
-                        train_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=True,
-                        pin_memory=False,
-                        drop_last=True, 
-                        collate_fn=collate_fn)
-        val_data = Action_DATASETS(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        image_transform=transform_val)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=False,
-                        drop_last=True,
-                        collate_fn=collate_fn)
-    else:
-        def collate_fn(batch):
-            cropped_videos, images, bbs, labels = zip(*batch)
-            # Check the labels for bb
-            cropped_videos = torch.stack(cropped_videos) 
-            images = torch.stack(images) 
-            labels = torch.tensor(labels)
-            return cropped_videos, images, labels
+    #     train_data = Action_DATASETS(
+    #                     config.data.train_list,
+    #                     config.data.label_list,
+    #                     num_segments=config.data.num_segments,
+    #                     image_tmpl=config.data.image_tmpl,
+    #                     random_shift=config.data.random_shift,
+    #                     image_transform=transform_train)
+    #     train_loader = DataLoader(
+    #                     train_data,
+    #                     batch_size=config.data.batch_size,
+    #                     num_workers=config.data.workers,
+    #                     shuffle=True,
+    #                     pin_memory=False,
+    #                     drop_last=True, 
+    #                     collate_fn=collate_fn)
+    #     val_data = Action_DATASETS(
+    #                     config.data.val_list,
+    #                     config.data.label_list, 
+    #                     random_shift=False,
+    #                     num_segments=config.data.num_segments,
+    #                     image_tmpl=config.data.image_tmpl,
+    #                     image_transform=transform_val)
+    #     val_loader = DataLoader(
+    #                     val_data,
+    #                     batch_size=config.data.batch_size,
+    #                     num_workers=config.data.workers,
+    #                     shuffle=False,
+    #                     pin_memory=False,
+    #                     drop_last=True,
+    #                     collate_fn=collate_fn)
+    def collate_fn(batch):
+        cropped_videos, images, bbs, labels = zip(*batch)
+        # Check the labels for bb
+        cropped_videos = torch.stack(cropped_videos) 
+        images = torch.stack(images) 
+        labels = torch.tensor(labels)
+        return cropped_videos, images, labels
 
-        train_data = Action_DATASETS_orig(
-                        config.data.train_list,
-                        config.data.label_list,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        random_shift=config.data.random_shift,
-                        transform=transform_train)
-        train_loader = DataLoader(
-                        train_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=True,
-                        pin_memory=False,
-                        drop_last=True, 
-                        collate_fn=collate_fn)
-        val_data = Action_DATASETS_orig(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        transform=transform_val)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=False,
-                        drop_last=True,
-                        collate_fn=collate_fn)
+    train_data = Action_DATASETS_orig(
+                    config.data.train_list,
+                    config.data.label_list,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    random_shift=config.data.random_shift,
+                    transform=transform_train)
+    train_loader = DataLoader(
+                    train_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=True,
+                    pin_memory=False,
+                    drop_last=True, 
+                    collate_fn=collate_fn)
+    val_data = Action_DATASETS_orig(
+                    config.data.val_list,
+                    config.data.label_list, 
+                    random_shift=False,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    transform=transform_val)
+    val_loader = DataLoader(
+                    val_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=False,
+                    pin_memory=False,
+                    drop_last=True,
+                    collate_fn=collate_fn)
 
 
     if device == "cpu":
@@ -425,15 +402,11 @@ def main():
     classes, num_text_aug, text_dict = text_prompt(train_data, file_name=config.prompt)
 
     replace_grad = ReplaceGrad.apply
-    # 1. Compile a proper list of the classes with label numbers
-    # 3. Create a replace_grad
     
-    # 2. Find what the perceptor is for me
-    # label_dict = {idx:class_name for idx, class_name in enumerate(train_data.classes)}
-    if config.data.bb.use:
-        criterion_list = create_prompt_loss_dict(train_data.classes, perceptor, replace_grad, device)
-    else:
-        criterion_list = []
+    # if config.data.bb.use:
+    #     criterion_list = create_prompt_loss_dict(train_data.classes, perceptor, replace_grad, device)
+    # else:
+    #     criterion_list = []
 
     best_prec1 = 0.0
     if config.solver.evaluate:
@@ -446,13 +419,13 @@ def main():
     optimizer = _optimizer(config, perceptor, fusion_model)
     lr_scheduler = _lr_scheduler(config, optimizer)
 
-    promptCrit = pl2(perceptor, replace_grad, im_emb_type=config.data.im_emb_type).to(device)
+    # promptCrit = pl2(perceptor, replace_grad, im_emb_type=config.data.im_emb_type).to(device)
 
     train_classifier(start_epoch = start_epoch, 
                      loss_img = loss_img,
                      loss_txt = loss_txt,
-                     criterion_list = criterion_list,
-                     promptCrit = promptCrit,
+                    #  criterion_list = criterion_list,
+                    #  promptCrit = promptCrit,
                      lr_scheduler = lr_scheduler,
                      config = config, 
                      text_dict = text_dict,
