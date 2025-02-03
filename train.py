@@ -80,6 +80,18 @@ def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas
     return loss_all, image_embedding, text_embedding
 
 
+def calculate_ce(device, classes, perceptor, image_embedding, b, num_text_aug, cross_entropy):
+    list_id = list_id.to(device)
+    text_inputs = classes.to(device)
+    text_features2 = perceptor.encode_text(text_inputs)
+    logits_per_image2_orig = (100.0 * image_embedding @ text_features2.T)
+    similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
+    similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
+    list_id = list_id.to(device)
+    ce_loss = cross_entropy(similarity+similarity_orig, list_id)
+    return ce_loss
+
+
 def train_classifier(start_epoch, 
                      loss_img,
                      loss_txt,
@@ -98,9 +110,7 @@ def train_classifier(start_epoch,
                      classes,
                      perceptor,
                      working_dir,
-                     device,
-                     lambda_bb,
-                     lambda_ce):
+                     device):
     best_prec1 = -1
     cross_entropy = nn.CrossEntropyLoss()
     clamp_with_grad = ClampWithGrad.apply
@@ -126,110 +136,67 @@ def train_classifier(start_epoch,
         model_image.train()
         model_text.train()
         fusion_model.train()
-        
-        ###########################################################################
-        # x = rand_vqgan_weights.movedim(1, 3)
-        # codebook = vqgan_model.quantize.embedding.weight
-        
-        # # vector_quantize
-        # d = x.pow(2).sum(dim=-1, keepdim=True) + codebook.pow(2).sum(dim=1) - 2 * x @ codebook.T
-        # indices = d.argmin(-1)
-        # x_q = F.one_hot(indices, codebook.shape[0]).to(d.dtype) @ codebook
-        # rand_vqgan_weights_q = replace_grad(x_q, x).movedim(3, 1)
-
-        # # clamp the gradient between the minimum and maximum weights of the original
-        # out = clamp_with_grad(vqgan_model.decode(rand_vqgan_weights_q).add(1).div(2), 0, 1)
-        ###########################################################################
-
         running_loss_all = 0
         running_kl = 0
         running_ce = 0
         running_total = 0
-
-        for kkk,data in enumerate(tqdm(train_loader)):
+        for kkk,(videos, orig_videos, list_id) in enumerate(tqdm(train_loader)):
             if config.solver.type != 'monitor':
                 if (kkk+1) == 1 or (kkk+1) % 10 == 0:
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
-            if len(data) > 3:
-                videos, aug_masks, lambdas, list_id = data
-                aug_masks = aug_masks.to(device)
-                lambdas = lambdas.to(device)
-            elif len(data) > 2:
-                videos, orig_videos, list_id = data
-                orig_videos = orig_videos.to(device)
-                list_id = list_id.to(device)
-                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            else:
-                videos, list_id = data
-                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            
+            videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
             b,t,c,h,w = videos.size()
-            
             text_id = numpy.random.randint(num_text_aug,size=len(list_id))
             texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
-
+            
             videos= videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
+            orig_videos = orig_videos.to(device).view(-1,c,h,w)
             texts = texts.to(device)
 
+            image_embedding = model_image(orig_videos)
+            image_embedding = image_embedding.view(b,t,-1)
+            image_embedding = fusion_model(image_embedding)
 
-            ############## Calculate explainability loss between attn and mask ###########
-            # run through the prompt model and get the new results from the prompts
-            if not config.data.use_orig:
-                loss_all, image_embedding, text_embedding = bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model)
-            else:
-                video_tensor = videos.view(-1,c,h,w )
-                image_embedding = model_image(video_tensor)
-                image_embedding = image_embedding.view(b,t,-1)
-                image_embedding = fusion_model(image_embedding)
-
-                video_tensor = orig_videos.view(-1,c,h,w )
-                image_emb_orig = model_image(video_tensor)
-                image_emb_orig = image_emb_orig.view(b,t,-1)
-                image_emb_orig = fusion_model(image_emb_orig)
-
-                text_embedding = model_text(texts)
+            text_embedding = model_text(texts)
 
             if config.network.fix_text:
                 text_embedding.detach_()
 
             logit_scale = perceptor.logit_scale.exp()
             logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
-            if config.data.use_orig:
-                logits_per_image_orig, logits_per_text_orig = create_logits(image_emb_orig,text_embedding,logit_scale)
+
+            if config.data.cropped.use:
+                image_emb_cropped = model_image(videos)
+                image_emb_cropped = image_emb_cropped.view(b,t,-1)
+                image_emb_cropped = fusion_model(image_emb_cropped)
+
+                logits_per_image_cropped, logits_per_text_cropped = create_logits(image_emb_cropped,text_embedding,logit_scale)
             
-            if lambda_ce != 0:
-                text_inputs = classes.to(device)
-                text_features2 = perceptor.encode_text(text_inputs)
-                logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
-                logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
-                similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
-                similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
-                list_id = list_id.to(device)
-                ce_loss = cross_entropy(similarity+similarity_orig, list_id)
+            if config.data.ce.use:
+                ce_loss = calculate_ce(device, classes, perceptor, image_embedding, b, num_text_aug, cross_entropy)
 
-
-            ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
+            ground_truth = torch.tensor(gen_label(list_id),dtype=image_emb_cropped.dtype,device=device)
             loss_imgs = loss_img(logits_per_image,ground_truth)
             loss_texts = loss_txt(logits_per_text,ground_truth)
 
-            if config.data.use_orig:
+            if config.data.orig.use:
                 loss_imgs_orig = loss_img(logits_per_image_orig, ground_truth)
                 loss_texts_orig = loss_txt(logits_per_text_orig,ground_truth)
 
                 kl_loss = (loss_imgs + loss_texts)/2
                 kl_loss_orig = ((loss_imgs_orig + loss_texts_orig)/2)
-                kl_loss = config.data.lambda_cropped*kl_loss + config.data.lambda_orig*kl_loss_orig
+                kl_loss = config.data.cropped.lambda_val*kl_loss + config.data.orig.lambda_val*kl_loss_orig
             else:
                 kl_loss = (loss_imgs + loss_texts)/2
             total_loss = kl_loss
             running_kl += kl_loss.item()
-            if lambda_bb > 0:
-                total_loss += lambda_bb*loss_all
+            if config.data.bb.use:
+                total_loss += config.data.bb.lambda_val*loss_all
                 running_loss_all += loss_all.item()
-            if lambda_ce > 0:
-                total_loss += lambda_ce*ce_loss
+            if config.data.ce.use:
+                total_loss += config.data.ce.lambda_val*ce_loss
                 running_ce += ce_loss.item()
             running_total += total_loss.item()
 
@@ -333,7 +300,7 @@ def main():
                                         cutn=1, 
                                         cut_pow=1., 
                                         noise_fac = 0.1)
-    if not config.data.use_orig:
+    if not config.data.orig.use:
         def collate_fn(batch):
             videos, masks, lambda_val, labels = zip(*batch)
             # Check the labels for bb
@@ -463,7 +430,7 @@ def main():
     
     # 2. Find what the perceptor is for me
     # label_dict = {idx:class_name for idx, class_name in enumerate(train_data.classes)}
-    if config.data.lambda_bb > 0:
+    if config.data.bb.use:
         criterion_list = create_prompt_loss_dict(train_data.classes, perceptor, replace_grad, device)
     else:
         criterion_list = []
@@ -499,9 +466,7 @@ def main():
                      classes = classes,
                      perceptor = perceptor,
                      working_dir = working_dir,
-                     device = device,
-                     lambda_bb=config.data.lambda_bb,
-                     lambda_ce=config.data.lambda_ce)
+                     device = device)
 
 
 if __name__ == '__main__':
