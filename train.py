@@ -111,8 +111,9 @@ def train_classifier(start_epoch,
                      working_dir,
                      device):
     best_prec1 = -1
-    cross_entropy = nn.CrossEntropyLoss()
-    clamp_with_grad = ClampWithGrad.apply
+    if config.data.ce.use:
+        cross_entropy = nn.CrossEntropyLoss()
+    # clamp_with_grad = ClampWithGrad.apply
 
     ################### Train Classifier ####################################
     # scaler = torch.cuda.amp.GradScaler()
@@ -163,15 +164,11 @@ def train_classifier(start_epoch,
 
                 logits_per_image_cropped, logits_per_text_cropped = create_logits(image_emb_cropped,text_embedding,logit_scale)
 
-                loss_imgs_orig = loss_img(logits_per_image_cropped, ground_truth)
-                loss_texts_orig = loss_txt(logits_per_text_orig,ground_truth)
+                loss_imgs_cropped = loss_img(logits_per_image_cropped, ground_truth)
 
-                kl_loss = (loss_imgs + loss_texts)/2
-                kl_loss_cropped = ((loss_imgs_orig + loss_texts_orig)/2)
-                kl_loss = config.data.orig.lambda_val*kl_loss + config.data.cropped.lambda_val*kl_loss_cropped
-            else:
-                kl_loss = (loss_imgs + loss_texts)/2
-            
+                loss_imgs = (config.data.orig.lambda_val*loss_imgs + config.data.cropped.lambda_val*loss_imgs_cropped)
+
+            kl_loss = (loss_imgs + loss_texts)/2
             total_loss = kl_loss
             
             if config.data.ce.use:

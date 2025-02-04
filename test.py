@@ -85,6 +85,7 @@ def plot_confusion_matrix(y_true, y_pred, classes, name,
     fig.tight_layout()
     plt.savefig(f'{name}.png')
     plt.clf()
+    plt.close()
 
 class TextCLIP(nn.Module):
     def __init__(self, model):
@@ -131,9 +132,9 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             image_features /= image_features.norm(dim=-1, keepdim=True)
             text_features /= text_features.norm(dim=-1, keepdim=True)
             logits_per_image = (100.0 * image_features @ text_features.T)
-            similarity = calculate_similarity(logits_per_image, b, num_text_aug)
+            similarity = config.data.orig.test_lambda*calculate_similarity(logits_per_image, b, num_text_aug)
 
-            if config.data.cropped.use and config.data.cropped.test:
+            if config.data.cropped.use and config.data.cropped.test_lambda > 0:
                 cropped_videos = cropped_videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
                 b, t, c, h, w = cropped_videos.size()
                 cropped_videos = cropped_videos.squeeze(dim=1)
@@ -142,9 +143,9 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
                 image_features = image_features.view(b,t,-1)
                 image_features = fusion_model(image_features)
                 image_features /= image_features.norm(dim=-1, keepdim=True)
-                text_features /= text_features.norm(dim=-1, keepdim=True)
+                # text_features /= text_features.norm(dim=-1, keepdim=True)
                 logits_per_image = (100.0 * image_features @ text_features.T)
-                similarity = similarity + calculate_similarity(logits_per_image, b, num_text_aug)
+                similarity = similarity + config.data.cropped.test_lambda*calculate_similarity(logits_per_image, b, num_text_aug)
 
             values_1, indices_1 = similarity.topk(1, dim=-1)
             values_5, indices_5 = similarity.topk(5, dim=-1)
