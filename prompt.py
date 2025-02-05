@@ -62,7 +62,7 @@ from dotmap import DotMap
 import pprint
 from modules.Visual_Prompt import visual_prompt
 from utils.KLLoss import KLLoss
-from test import validate
+# from test import validate
 from utils.Augmentation import *
 from utils.solver import _optimizer, _lr_scheduler
 from utils.tools import *
