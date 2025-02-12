@@ -1,0 +1,73 @@
+resume:
+pretrain:
+seed: 1737328734
+prompt: './prompts/generic_prompts.txt'
+use_calc_norm: False
+data:
+    dataset: education6
+    modality: RGB
+    num_segments: 8
+    seg_length: 1
+    batch_size: 16
+    workers: 16
+    num_classes: 6
+    image_tmpl: '{:04d}.jpg'
+    train_list: '../../splits/split_reduced/trainnewsplit01.txt'
+    val_list: '../../splits/split_reduced/testnewsplit01.txt' #
+    # train_list: '../../splits/split/trainsplit00.txt'
+    # val_list: '../../splits/split/testsplit00.txt' #
+    label_list: '../../splits/split_reduced/education_6_labels.csv'
+    index_bias: 1
+    input_size: 224
+    randaug:
+        N: 2 #2
+        M: 9  #9
+    random_shift: True
+    im_emb_type: 'just_image' # just_image, just_mask, average
+    # lambda_bb: 0 # lambda_bb == 0 and lambda_ce == 0 is just the original ActionCLIP
+    # lambda_ce: 0
+    # lambda_orig: 1
+    # lambda_cropped: .5
+    # use_orig: True
+    orig:
+        use: True
+        lambda_val: .75
+        test_lambda: 1
+    cropped:
+        use: True
+        lambda_val: 0
+        test: False
+        test_lambda: 1
+    ce:
+        use: False
+        lambda_val: 0
+network:
+    arch: ViT-B/32  #ViT-B/32 ViT-B/16
+    init: True
+    tsm: False
+    drop_out: 0.0 
+    emb_dropout: 0.0 
+    type: clip_k400
+    sim_header: "Transf"  #Transf   meanP  LSTM Conv_1D Transf_cls
+    joint: False
+    describe:
+solver:
+    type: cosine
+    epochs: 50
+    start_epoch: 0
+    epoch_offset: 0
+    optim: adamw
+    lr: 5.e-6
+    lr_warmup_step: 5
+    momentum: 0.9
+    weight_decay: 0.2
+    lr_decay_step: 15
+    lr_decay_factor: 0.1
+    clip_gradient: 20
+    loss_type: nll
+    evaluate: False
+    ratio: 1
+    f_ratio: 10
+logging:
+    print_freq: 10
+    eval_freq: 1

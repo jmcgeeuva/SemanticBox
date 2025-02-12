@@ -29,6 +29,8 @@ from sklearn.utils.multiclass import unique_labels
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
+from gradcam_helper import *
+from utils.tools import *
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,
@@ -108,7 +110,7 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     return similarity
 
 
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug):
+def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, print_figures=False):
     model.eval()
     fusion_model.eval()
     num = 0
@@ -117,45 +119,50 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
 
     labeled_ids = []
     correct_ids = []
+    wrong_list = []
+    correct_list = []
+    idx_list = []
     with torch.no_grad():
         text_inputs = classes.to(device)
+        # only needs to be done once because it never changes
         text_features = model.encode_text(text_inputs)
+        text_features /= text_features.norm(dim=-1, keepdim=True)
         for iii, data in enumerate(tqdm(val_loader)):
             if len(data) > 3:
-                image, aug_masks, lambdas, class_id = data
+                videos, aug_masks, lambdas, class_id = data
                 aug_masks = aug_masks.to(device)
                 lambdas = lambdas.to(device)
-            elif len(data) > 2:
-                image, orig_videos, class_id = data
-                orig_videos = orig_videos.to(device)
                 class_id = class_id.to(device)
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
+            elif len(data) > 2:
+                cropped_videos, videos, class_id = data
+                videos = videos.to(device)
+                class_id = class_id.to(device)
+                cropped_videos = cropped_videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
             else:
-                image, class_id = data
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
+                videos, class_id = data
+                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
 
             # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
-            b, t, c, h, w = image.size()
-            class_id = class_id.to(device)
-            image_input = image.to(device).view(-1, c, h, w)
+            videos = videos.squeeze(dim=1)
+            b, t, c, h, w = videos.size()
+            image_input = videos.to(device).view(-1, c, h, w)
             image_features = model.encode_image(image_input)
             image_features = image_features.view(b,t,-1)
             image_features = fusion_model(image_features)
-            image_features /= image_features.norm(dim=-1, keepdim=True)
-            text_features /= text_features.norm(dim=-1, keepdim=True)
-            logits_per_image = (100.0 * image_features @ text_features.T)
-            similarity = calculate_similarity(logits_per_image, b, num_text_aug)
+            logit_scale = 100.0
 
-            if config.data.use_orig:
-                orig_videos = orig_videos.squeeze(dim=1)
-                image_input = orig_videos.to(device).view(-1, c, h, w)
-                image_features = model.encode_image(image_input)
-                image_features = image_features.view(b,t,-1)
-                image_features = fusion_model(image_features)
-                image_features /= image_features.norm(dim=-1, keepdim=True)
-                text_features /= text_features.norm(dim=-1, keepdim=True)
-                logits_per_image = (100.0 * image_features @ text_features.T)
-                similarity = similarity + calculate_similarity(logits_per_image, b, num_text_aug)
+            if config.data.lambda_cropped > 0:
+                b, t, c, h, w = cropped_videos.size()
+                image_input_crp = cropped_videos.to(device).view(-1, c, h, w)
+                image_features_crp = model.encode_image(image_input_crp)
+                image_features_crp = image_features_crp.view(b,t,-1)
+                image_features_crp = fusion_model(image_features_crp)
+
+                logits_per_image, _ = create_cropped_logits(image_features, image_features_crp,config.data.lambda_orig, config.data.lambda_cropped,text_features,logit_scale)
+            else:
+                logits_per_image, _ = create_logits(image_features,text_features,logit_scale)
+            
+            similarity = calculate_similarity(logits_per_image, b, num_text_aug)
 
             values_1, indices_1 = similarity.topk(1, dim=-1)
             values_5, indices_5 = similarity.topk(5, dim=-1)
@@ -163,6 +170,10 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             for i in range(b):
                 if indices_1[i] == class_id[i]:
                     corr_1 += 1
+                else:
+                    wrong_list.append(int(indices_1[i]))
+                    correct_list.append(class_id[i])
+                    idx_list.append(b*iii + i)
                 if class_id[i] in indices_5[i]:
                     corr_5 += 1
     
@@ -170,7 +181,13 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             labeled_ids.extend(yhat.tolist())
             correct_ids.extend(class_id.tolist())
 
-    plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
+    if print_figures:
+        plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
+
+        with open(f'{config.test_name}.txt', 'w') as f:
+            f.write(f'idx,wrong,correct\n')
+            for idx, wrong, correct in zip(idx_list, wrong_list, correct_list):
+                f.write(f'{idx},{wrong},{correct}\n')
 
     top1 = float(corr_1) / num * 100
     top5 = float(corr_5) / num * 100
@@ -229,7 +246,7 @@ def main():
     wandb.watch(model)
     wandb.watch(fusion_model)
 
-    if not config.data.use_orig:
+    if config.data.lambda_bb > 0:
         mask_transform = get_mask_augmentation(cut_size=224, 
                                             cutn=1, 
                                             cut_pow=1., 
@@ -312,7 +329,7 @@ def main():
     classes, num_text_aug, text_dict = text_prompt(val_data, config.prompt)
 
     best_prec1 = 0.0
-    prec1 = validate(start_epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug)
+    prec1 = validate(start_epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, True)
 
 if __name__ == '__main__':
     main()
