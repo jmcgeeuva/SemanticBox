@@ -18,7 +18,7 @@ import cv2
 import numbers
 import math
 import torch
-from RandAugment import RandAugment
+from randaugment import RandAugment
 
 class GroupTransform(object):
     def __init__(self, transform):
@@ -142,17 +142,17 @@ class Action_DATASETS(data.Dataset):
 
     def _get_val_indices(self, record):
         if self.num_segments == 1:
-            return np.array([record.num_frames //2], dtype=np.int) + self.index_bias
+            return np.array([record.num_frames //2], dtype=int) + self.index_bias
         
         if record.num_frames <= self.total_length:
             if self.loop:
                 return np.mod(np.arange(self.total_length), record.num_frames) + self.index_bias
             return np.array([i * record.num_frames // self.total_length
-                             for i in range(self.total_length)], dtype=np.int) + self.index_bias
+                             for i in range(self.total_length)], dtype=int) + self.index_bias
         offset = (record.num_frames / self.num_segments - self.seg_length) / 2.0
         return np.array([i * record.num_frames / self.num_segments + offset + j
                          for i in range(self.num_segments)
-                         for j in range(self.seg_length)], dtype=np.int) + self.index_bias
+                         for j in range(self.seg_length)], dtype=int) + self.index_bias
 
     def __getitem__(self, index):
         record = self.video_list[index]

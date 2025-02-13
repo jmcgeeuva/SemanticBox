@@ -3,7 +3,8 @@
 # Mengmeng Wang, Jiazheng Xing, Yong Liu
 
 from datasets.transforms_ss import *
-from RandAugment import RandAugment
+from randaugment import RandAugment
+from torchvision import transforms
 
 class GroupTransform(object):
     def __init__(self, transform):
@@ -38,5 +39,5 @@ def get_augmentation(training, config):
 
 def randAugment(transform_train,config):
     print('Using RandAugment!')
-    transform_train.transforms.insert(0, GroupTransform(RandAugment(config.data.randaug.N, config.data.randaug.M)))
+    transform_train.transforms.insert(0, GroupTransform(transforms.RandAugment(config.data.randaug.N, config.data.randaug.M)))
     return transform_train
