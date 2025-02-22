@@ -7,7 +7,6 @@ import os
 import os.path
 import numpy as np
 from numpy.random import randint
-import pdb
 import io
 import time
 import pandas as pd
@@ -318,7 +317,7 @@ class Action_DATASETS_orig(data.Dataset):
                  image_tmpl='img_{:05d}.jpg', transform=None,
                  random_shift=True, test_mode=False, index_bias=1, 
                  height=224, width=224, label_box=False, debug=False,
-                 bounding_boxes=True):
+                 bounding_boxes=True, windows_path=None):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -335,6 +334,7 @@ class Action_DATASETS_orig(data.Dataset):
         self.label_box = label_box
         self.debug = debug
         self.bounding_boxes = bounding_boxes
+        self.windows_path = windows_path
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -345,9 +345,13 @@ class Action_DATASETS_orig(data.Dataset):
         self.initialized = False
 
     def _load_image(self, directory, idx):
+        if self.windows_path == None:
+            return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
+        else:
+            image_path = os.path.join(self.windows_path, directory, self.image_tmpl.format(idx))
+            image_path = os.path.normpath(image_path)
+            return [Image.open(image_path).convert('RGB')]
 
-        return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
-    
     def _load_teacher_box(self, annotation, idx):
         box = []
         if not self.label_box:
@@ -460,8 +464,14 @@ class Action_DATASETS_orig(data.Dataset):
         images = list()
         bbs = list()
         
-        with open(os.path.join(record.path, 'annotation.json')) as f:
-            annotation = json.load(f, object_pairs_hook=OrderedDict)
+        if self.windows_path:
+            annotation_path = os.path.join(self.windows_path, record.path, 'annotation.json')
+            annotation_path = os.path.normpath(annotation_path)
+            with open(annotation_path) as f:
+                annotation = json.load(f, object_pairs_hook=OrderedDict)
+        else:
+            with open(os.path.join(record.path, 'annotation.json')) as f:
+                annotation = json.load(f, object_pairs_hook=OrderedDict)
 
         for i, seg_ind in enumerate(indices):
             p = int(seg_ind)

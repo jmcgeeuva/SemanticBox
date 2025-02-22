@@ -3,13 +3,14 @@ pretrain:
 seed: 1737328734
 prompt: './prompts/generic_prompts.txt'
 use_calc_norm: False
+windows_path: 'Z:\\NeuralNetworksProjectVideos\\Data Science Competition\\Bounding_McGee\\'
 data:
     dataset: education6
     modality: RGB
     num_segments: 8
     seg_length: 1
     batch_size: 16
-    workers: 16
+    workers: 0
     num_classes: 6
     image_tmpl: '{:04d}.jpg'
     # train_list: '../bounding_box/splits/split_reduced/trainnewsplit01.txt'

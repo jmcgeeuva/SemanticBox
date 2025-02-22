@@ -103,20 +103,24 @@ class TextCLIP(nn.Module):
         return self.forward_method(arg1,arg2,arg3)
 
 class ImageCLIP(nn.Module):
-    def __init__(self, model, use_clip, processor=None, fusion_model=None, model_text=None) :
+    def __init__(self, model) :
         super(ImageCLIP, self).__init__()
         self.model = model
-        self.language_model = model.language_model
-        if use_clip:
-            self.forward_method = self.clip_forward
-        else:
-            self.forward_method = self.flo_forward
-        self.processor = processor
-        self.fusion_model = fusion_model
-        self.model_text = model_text
 
     def clip_forward(self, image, args2=None):
         return self.model.encode_image(image)
+
+    def forward(self,image,input_ids=None):
+        return self.clip_forward(image, input_ids)
+
+class ImageFlorence(nn.Module):
+    def __init__(self, model, use_clip, processor=None, config=None, vlm_state_dict=None) :
+        super(ImageFlorence, self).__init__()
+        self.model = model
+        self.language_model = model.language_model
+        self.processor = processor
+        self.fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
+        self.model_text = TextCLIP(model, use_clip=use_clip)
 
     def flo_forward(self, videos, texts):
         b,d,t,c,h,w = videos.size()
@@ -154,15 +158,16 @@ class ImageCLIP(nn.Module):
         print(f'DEVICE: {attention_mask.get_device()} {inputs_embeds.get_device()} {texts.get_device()}')
         # logits = self.model_text(inputs_embeds, attention_mask, texts)
         
+        import pdb; pdb.set_trace()
         logits = self.language_model(
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             labels=texts
         )
-        return logits
+        return logits, image_features
 
     def forward(self,image,input_ids=None):
-        return self.forward_method(image, input_ids)
+        return self.flo_forward(image, input_ids)
 
 class PromptLoss(nn.Module):
     def __init__(self, text, perceptor, replace_grad):

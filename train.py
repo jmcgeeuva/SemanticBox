@@ -25,7 +25,7 @@ from utils.saving import  *
 import sys
 sys.path.insert(0, "../explain/ml-no-token-left-behind/external/tamingtransformers/")
 sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
-from prompt import PromptLoss, TextCLIP, ImageCLIP
+from prompt import PromptLoss, TextCLIP, ImageCLIP, ImageFlorence
 from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
@@ -110,7 +110,8 @@ def train_classifier(start_epoch,
     # scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, config.solver.epochs):
         model_image.train()
-        fusion_model.train()
+        if fusion_model:
+            fusion_model.train()
 
         running_loss_all = 0
         running_kl = 0
@@ -122,8 +123,8 @@ def train_classifier(start_epoch,
             with torch.no_grad():
                 text_features2 = model_text(text_inputs)
             model_text.train()
-        else:
-            model_text.train()
+        # else:
+        #     model_text.train()
         for kkk,data in enumerate(tqdm(train_loader)):
             if config.solver.type != 'monitor':
                 if (kkk+1) == 1 or (kkk+1) % 10 == 0:
@@ -185,9 +186,32 @@ def train_classifier(start_epoch,
                 kl_loss = (loss_imgs + loss_texts)/2
             else:
 
+                print(videos.get_device())
+                print(texts.get_device())
+                print(next(model_image.parameters()).device)
+                import pdb; pdb.set_trace()
+                outputs, image_features = model_image(videos, texts)
 
-                logits = model_image(videos, texts)
-                print(logits.shape)
+                logits = outputs.logits
+                logits = logits.float()
+                loss = outputs.loss
+                # if not return_dict:
+                #     output = (logits,) + outputs[1:]
+                #     return (loss,) + output if loss is not None else output
+
+                res = flor2.Florence2Seq2SeqLMOutput(
+                    loss=loss,
+                    logits=logits,
+                    past_key_values=outputs.past_key_values,
+                    decoder_hidden_states=outputs.decoder_hidden_states,
+                    decoder_attentions=outputs.decoder_attentions,
+                    cross_attentions=outputs.cross_attentions,
+                    encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+                    encoder_hidden_states=outputs.encoder_hidden_states,
+                    encoder_attentions=outputs.encoder_attentions,
+                    image_hidden_states=image_features
+                )
+                print(res.logits.shape)
                 raise ValueError()
 
             total_loss = kl_loss
@@ -245,12 +269,12 @@ def main():
         config = yaml.safe_load(f)
     working_dir = os.path.join('./exp', config['network']['type'], config['network']['arch'], config['data']['dataset'], args.log_time)
     
-    # seed = int(config['seed'])
-    # torch.manual_seed(seed) 
-    # torch.cuda.manual_seed(seed)  # For GPU operations
-    # torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
-    # random.seed(seed)
-    # numpy.random.seed(seed) 
+    seed = int(config['seed'])
+    torch.manual_seed(seed) 
+    torch.cuda.manual_seed(seed)  # For GPU operations
+    torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
+    random.seed(seed)
+    numpy.random.seed(seed) 
 
     wandb.init(project=config['network']['type'],name='{}_{}_{}_{}'.format(args.log_time,config['network']['type'], config['network']['arch'], config['data']['dataset']))
     print('-' * 80)
@@ -271,7 +295,7 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 
-    use_clip = False
+    use_clip = True
     if use_clip:
         perceptor, vlm_state_dict = clip.load(config.network.arch,
                                             device=device,
@@ -304,20 +328,21 @@ def main():
     # print('train transforms: {}'.format(transform_train.transforms))
     # print('val transforms: {}'.format(transform_val.transforms))
 
-    fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
-    model_text = TextCLIP(perceptor, use_clip=use_clip)
     if use_clip:
-        model_image = ImageCLIP(perceptor, use_clip=use_clip)
+        model_image = ImageCLIP(perceptor)
+        fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
+        model_text = TextCLIP(perceptor, use_clip=use_clip)
+        wandb.watch(fusion_model)
+        processor=None
     else:
-        model_text = model_text.to(device)
-        model_image = ImageCLIP(perceptor, use_clip=use_clip, processor=processor, fusion_model=fusion_model, model_text=model_text)
-    # model_stan = stanet_af(layers=[2, 2, 2, 2], in_channels=2, num_classes=embed_dim, k=2, features=16)
-    model_text = torch.nn.DataParallel(model_text).cuda()
-    model_image = torch.nn.DataParallel(model_image).cuda()
-    fusion_model = torch.nn.DataParallel(fusion_model).cuda()
+        model_image = ImageFlorence(perceptor, use_clip=use_clip, processor=processor, config=config, vlm_state_dict=vlm_state_dict)
+        fusion_model = None
+        model_text= None
+    # model_text = torch.nn.DataParallel(model_text).cuda()
+    # model_image = torch.nn.DataParallel(model_image).cuda()
+    # fusion_model = torch.nn.DataParallel(fusion_model).cuda()
 
     wandb.watch(perceptor)
-    wandb.watch(fusion_model)
 
     mask_transform = get_mask_augmentation(cut_size=224, 
                                         cutn=1, 
@@ -384,6 +409,7 @@ def main():
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
                         random_shift=config.data.random_shift,
+                        windows_path=config.windows_path,
                         transform=transform_train)
         train_loader = DataLoader(
                         train_data,
@@ -399,6 +425,7 @@ def main():
                         random_shift=False,
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
+                        windows_path=config.windows_path,
                         transform=transform_val)
         val_loader = DataLoader(
                         val_data,

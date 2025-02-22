@@ -1033,6 +1033,7 @@ class Florence2LanguageForConditionalGeneration(Florence2LanguagePreTrainedModel
                     labels, self.config.pad_token_id, self.config.decoder_start_token_id
                 )
 
+        import pdb; pdb.set_trace()
         outputs = self.model(
             input_ids,
             attention_mask=attention_mask,
@@ -2133,6 +2134,7 @@ class Florence2ForConditionalGeneration(Florence2PreTrainedModel):
 
         if inputs_embeds is not None:
             attention_mask = attention_mask.to(inputs_embeds.dtype)
+            
         outputs = self.language_model(
             attention_mask=attention_mask,
             labels=labels,

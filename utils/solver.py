@@ -23,16 +23,21 @@ def _optimizer(config, model, fusion_model, use_clip):
     elif config.solver.optim == 'adamw':
         if use_clip:
             visual_model = model.visual
+            vision_params = list(map(id, visual_model.parameters()))
+            text_params = filter(lambda p: id(p) not in vision_params,
+                                model.parameters())
+            optimizer_list = [{'params': text_params},
+                                 {'params': visual_model.parameters(), 'lr': config.solver.lr * config.solver.ratio},
+                                 {'params': fusion_model.parameters(), 'lr': config.solver.lr * config.solver.f_ratio}]
         else:
             visual_model = model.vision_tower
+            vision_params = list(map(id, visual_model.parameters()))
+            text_params = filter(lambda p: id(p) not in vision_params,
+                                model.parameters())
+            optimizer_list = [{'params': text_params}, {'params': visual_model.parameters(), 'lr': config.solver.lr * config.solver.ratio}]
         
-        vision_params = list(map(id, visual_model.parameters()))
-        text_params = filter(lambda p: id(p) not in vision_params,
-                             model.parameters())
 
-        optimizer = optim.AdamW([{'params': text_params},
-                                 {'params': visual_model.parameters(), 'lr': config.solver.lr * config.solver.ratio},
-                                 {'params': fusion_model.parameters(), 'lr': config.solver.lr * config.solver.f_ratio}],
+        optimizer = optim.AdamW(optimizer_list,
                                 betas=(0.9, 0.98), lr=config.solver.lr, eps=1e-8,
                                 weight_decay=config.solver.weight_decay)  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
         for param_group in optimizer.param_groups:

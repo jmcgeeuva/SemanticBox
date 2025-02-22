@@ -1,0 +1,259 @@
+    1  rm -rf CPL/
+    2  cd ..
+    3  rm -rf venv
+    4  rm -rf ./*
+    5  rm -rf ./*py
+    6  cd ../../CPL
+    7  ls
+    8  cd ../..
+    9  cd ../CPL
+   10  ls
+   11  git remote -v
+   12  ls
+   13  git clone https://github.com/hkarimi-uva/MonteCarlo.git
+   14  git logic
+   15  git login
+   16  git clone https://github.com/hkarimi-uva/MonteCarlo.git
+   17  git config -l
+   18  git config user.name 
+   19  ssh -T git@github.com
+   20  git config -l | grep user.name~
+   21  git config -l | grep user.name
+   22  git config -l | grep email
+   23  echo $PATH
+   24  clang
+   25  where clang
+   26  where clang*
+   27  where clang-tidy
+   28  /c/Program Files/LLVM/bin/clang-tidy
+   29  pwd
+   30  /c/Users/tkg5kq/Program Files/LLVM/bin/clang-tidy
+   31  ls /c/
+   32  /c/Program\ Files/LLVM/bin/clang-tidy.exe 
+   33  /c/Program\ Files/LLVM/bin/clang-tidy.exe 
+   34  conda
+   35  touch README.txt
+   36  code ./
+   37  pwd
+   38  ls
+   39  cd MonteCarlo/
+   40  git status
+   41  cd ../
+   42  ls
+   43  cd code/
+   44  cd MonteCarlo/
+   45  git status
+   46  code ./
+   47  mklink
+   48  git status
+   49  git add test.ipynb 
+   50  git status
+   51  git commit -m "modifications made on alienware"
+   52  git status
+   53  git push
+   54  git pull origin main
+   55  git status
+   56  git pull
+   57  git pull -f origin main
+   58  git fetch --all
+   59  git reset --hard origin/master
+   60  git reset --hard origin/master
+   61  git reset -hard origin/master
+   62  git reset --hard HEAD
+   63  git status
+   64  git pull
+   65  git pull origin main
+   66  git reset --hard HEAD
+   67  cd ..
+   68  ls
+   69  git checkout temporospatial/
+   70  cd temp
+   71  cd ../temporospatial/
+   72  git status
+   73  git checkout test
+   74  git status
+   75  git checkout -b test
+   76  git status
+   77  git push -u origin test
+   78  git status
+   79  git checkout -
+   80  git log
+   81  git reset --hard fac7dbb7ce4fca63ec973c6a737e173d750644c5
+   82  git status
+   83  git pull
+   84  rm -rf src
+   85  git pull
+   86  git status
+   87  git push
+   88  git pull
+   89  git status
+   90  ls
+   91  git pull
+   92  git status
+   93  git status
+   94  git add --all
+   95  git commit -m "adding gradcam tutorial"
+   96  git push
+   97  git add --all
+   98  git commit -m "adding gradcam tutorial"
+   99  git push
+  100  git clone https://gist.github.com/f7b507bc66b2215e15cc0135f03c3ff9.git
+  101  git clone git@github.com:pytorch/captum.git
+  102  git clone https://github.com/pytorch/captum.git
+  103  #!/bin/bash
+  104  # Download directories vars
+  105  root_dl="k400"
+  106  root_dl_targz="k400_targz"
+  107  # Make root directories
+  108  [ ! -d $root_dl ] && mkdir $root_dl
+  109  [ ! -d $root_dl_targz ] && mkdir $root_dl_targz
+  110  # Download train tars, will resume
+  111  curr_dl=${root_dl_targz}/train
+  112  url=https://s3.amazonaws.com/kinetics/400/train/k400_train_path.txt
+  113  [ ! -d $curr_dl ] && mkdir -p $curr_dl
+  114  wget -c -i $url -P $curr_dl
+  115  # Download validation tars, will resume
+  116  curr_dl=${root_dl_targz}/val
+  117  url=https://s3.amazonaws.com/kinetics/400/val/k400_val_path.txt
+  118  [ ! -d $curr_dl ] && mkdir -p $curr_dl
+  119  wget -c -i $url -P $curr_dl
+  120  # Download test tars, will resume
+  121  curr_dl=${root_dl_targz}/test
+  122  url=https://s3.amazonaws.com/kinetics/400/test/k400_test_path.txt
+  123  [ ! -d $curr_dl ] && mkdir -p $curr_dl
+  124  wget -c -i $url -P $curr_dl
+  125  # Download replacement tars, will resume
+  126  curr_dl=${root_dl_targz}/replacement
+  127  url=https://s3.amazonaws.com/kinetics/400/replacement_for_corrupted_k400.tgz
+  128  [ ! -d $curr_dl ] && mkdir -p $curr_dl
+  129  wget -c $url -P $curr_dl
+  130  # Download annotations csv files
+  131  curr_dl=${root_dl}/annotations
+  132  url_tr=https://s3.amazonaws.com/kinetics/400/annotations/train.csv
+  133  url_v=https://s3.amazonaws.com/kinetics/400/annotations/val.csv
+  134  url_t=https://s3.amazonaws.com/kinetics/400/annotations/test.csv
+  135  [ ! -d $curr_dl ] && mkdir -p $curr_dl
+  136  wget -c $url_tr -P $curr_dl
+  137  wget -c $url_v -P $curr_dl
+  138  wget -c $url_t -P $curr_dl
+  139  # Download readme
+  140  url=http://s3.amazonaws.com/kinetics/400/readme.md
+  141  wget -c $url -P $root_dl
+  142  # Downloads complete
+  143  echo -e "\nDownloads complete! Now run extractor, k400_extractor.sh"
+  144  wget www.google.com
+  145  wget.exe www.google.com
+  146  ls
+  147  ./wget.exe www.google.com
+  148  git status
+  149  git add --all
+  150  git commit -m "fixing main to fit visual studio too"
+  151  git push
+  152  mkdir ucf-horizontal
+  153  mkdir -p ucf-horizontal/ucf101/UCF-101
+  154  cp -rf ./ucf-101/UCF101TrainTestSplits-RecognitionTask/ ucf-horizontal/
+  155  cp -rf ucf-101/ucf101/UCF-101/VolleyballSpiking ucf-horizontal/ucf101/UCF-101/
+  156  cp -rf ucf-101/ucf101/UCF-101/BoxingPunchingBag/ ucf-horizontal/ucf101/UCF-101/
+  157  cp -rf ucf-101/ucf101/UCF-101/BoxingSpeedBag/ ucf-horizontal/ucf101/UCF-101/
+  158  cp -rf ucf-101/ucf101/UCF-101/HulaHoop/ ucf-horizontal/ucf101/UCF-101/
+  159  touch remove_classes.py
+  160  code .
+  161  mkdir tmp
+  162  cd tmp
+  163  git clone https://github.com/hkarimi-uva/MonteCarlo.git
+  164  clear
+  165  ls
+  166  git checkout master
+  167  cd MonteCarlo/
+  168  git checkout master
+  169  #!/bin/bash
+  170   
+  171  #SBATCH --job-name=test-%a
+  172  #SBATCH --time=15:00:00
+  173  #SBATCH --nodes=1
+  174  #SBATCH --ntasks=6 # number of cores/processors
+  175  #SBATCH --mem=128000
+  176  #SBATCH --partition=gpu
+  177  #SBATCH --gres=gpu
+  178  #SBATCH --output=/dev/null
+  179  #SBATCH --error=/dev/null
+  180  #SBATCH -A cdt_computing
+  181  # load modules
+  182  module load java/8
+  183  module load libtorch
+  184  module load cuda/12.2.2
+  185  LOG_DIR="logs"
+  186  if [ ! -d "$LOG_DIR" ]; then   mkdir -p "$LOG_DIR"; fi
+  187  # configure log file path
+  188  # Check if SLURM_ARRAY_JOB_ID is set and not empty
+  189  if [[ -n "${SLURM_ARRAY_JOB_ID}" ]]; then     now=$(date +"%y%m%d");     logpath="${LOG_DIR}/logs-$now-${SLURM_ARRAY_JOB_ID}";     mkdir -p $logpath;     logfile="$logpath/${SLURM_ARRAY_TASK_ID}.out"; else
+  190      now=$(date +"%y%m%d-%H%M%S");     logfile="${LOG_DIR}/logs-$now.out"; fi
+  191  echo "Running $@ with ID ${SLURM_ARRAY_TASK_ID} ..."
+  192  python $@ > "${logfile}" 2>&1
+  193  touch README.md
+  194  ls
+  195  git branch
+  196  sh scripts/run_train.sh ./configs/education/generic.yaml 
+  197  source activate video
+  198  python -m pip install randaugment
+  199  python
+  200  conda info --envs
+  201  conda create --name bound -y
+  202  conda activate bound
+  203  conda install pytorch==2.2.1 torchvision==0.17.1  pytorch-cuda=12.1 -c pytorch -c nvidia -y
+  204  python
+  205  python -m pip install numpy --upgrade
+  206  python -m pip install --upgrade pip
+  207  python
+  208  python -m pip install numpy --upgrade
+  209  pip install --force-reinstall -v "numpy==1.25.2"
+  210  python -m pip uninstall numpy
+  211  python -m pip install numpy<2
+  212  python -m pip install 'numpy<2'
+  213  python
+  214  clear
+  215  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  216  python -m pip install pandas
+  217  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  218  python -m pip install opencv-python
+  219  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  220  python -m pip install randaugment
+  221  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  222  python -m pip install tqdm
+  223  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  224  python -m pip install wandb
+  225  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  226  python -m pip install dotmap
+  227  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  228  python -m pip install ftfy
+  229  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  230  python -m pip install regex
+  231  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  232  python -m pip install kornia
+  233  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  234  python -m pip install omegaconf
+  235  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  236  python -m pip install matplotlib
+  237  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  238  python -m pip install captum
+  239  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  240  python -m pip install ipython
+  241  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  242  python -m pip install imageio
+  243  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  244  python -m pip install scikit-learn
+  245  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  246  python -m pip install pytorch_grad_cam
+  247  python -m pip install gradcam
+  248  python -m pip install pytorch-gradcam
+  249  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  250  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  251  python -m pip install grad-cam
+  252  python -m pip uninstall pytorch-gradcam
+  253  python -m pip install einops
+  254  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  255  python -m pip install timm
+  256  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  257  python -m pip install transformers
+  258  sh ./scripts/run_train.sh ./configs/education/generic.yaml 
+  259  history > install.txt

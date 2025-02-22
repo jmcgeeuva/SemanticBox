@@ -21,6 +21,17 @@
 - [Citing_ActionClip](#Citing_ActionCLIP)
 - [Acknowledgments](#Acknowledgments)
 
+## Install 
+
+```bash
+conda create --name bound -y
+conda activate bound
+conda install pytorch==2.2.1 torchvision==0.17.1  pytorch-cuda=12.1 -c pytorch -c nvidia -y
+python -m pip install 'numpy<2'
+python -m pip install pandas opencv-python randaugment tqdm wandb dotmap ftfy regex kornia omegaconf matplotlib captum ipython imageio scikit-learn grad-cam einops timm transformers
+wandb login
+```
+
 ## Prerequisites
 
 The code is built with following libraries:

@@ -109,26 +109,20 @@ class TemporalTransformer(nn.Module):
 
 
 class visual_prompt(nn.Module):
-    def __init__(self, sim_head, clip_state_dict, T, double_embedding=False):
+    def __init__(self, sim_head, clip_state_dict, T):
         super().__init__()
         self.sim_header = sim_head
         self.T = T
         assert sim_head in ["meanP", "LSTM", "Transf", "Conv_1D", "Transf_cls"]
 
         if self.sim_header == "LSTM" or self.sim_header == "Transf" or self.sim_header == "Transf_cls" or self.sim_header == "Conv_1D":
-            # import pdb; pdb.set_trace()
             embed_dim = clip_state_dict["text_projection"].shape[1]
 
-            if double_embedding:
-                embed_dim *= 2
-
             context_length = clip_state_dict["positional_embedding"].shape[0]
-            # vocab_size = clip_state_dict["token_embedding.weight"].shape[0]
             transformer_width = clip_state_dict["ln_final.weight"].shape[0]
             transformer_heads = transformer_width // 64
 
-            transformer_layers = len(
-                set(k.split(".")[2] for k in clip_state_dict if k.startswith(f"transformer.resblocks")))
+            # transformer_layers = len(set(k.split(".")[2] for k in clip_state_dict if k.startswith(f"transformer.resblocks")))
 
             # FIXME: Magic numbers
             # embed_dim2 = (13+(math.ceil(math.sqrt((112*112)//1024))**2+1))*embed_dim
@@ -188,10 +182,14 @@ class visual_prompt(nn.Module):
             seq_length = t
             position_ids = torch.arange(seq_length, dtype=torch.long, device=x.device)
             position_ids = position_ids.unsqueeze(0).expand(x.size(0), -1)
+            print(position_ids.get_device())
+            self.frame_position_embeddings = self.frame_position_embeddings.to(device=position_ids.get_device())
+            print(next(self.frame_position_embeddings.parameters()).device)
             frame_position_embeddings = self.frame_position_embeddings(position_ids)
             x = x + frame_position_embeddings
 
             x = x.permute(1, 0, 2)  # NLD -> LND
+            self.transformer = self.transformer.to(device=x.get_device())
             x = self.transformer(x)
             x = x.permute(1, 0, 2)  # LND -> NLD
             x = x.type(x_original.dtype) + x_original
