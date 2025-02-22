@@ -4,8 +4,8 @@
 
 import os
 import sys
-sys.path.insert(0, "./../explain/ml-no-token-left-behind/external/tamingtransformers/")
-sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
+sys.path.insert(0, "./../explainable_bounding_box/ml-no-token-left-behind/external/tamingtransformers/")
+sys.path.append("./../explainable_bounding_box/ml-no-token-left-behind/external/TransformerMMExplainability/")
 import CLIP.clip as clip
 import torch.nn as nn
 from datasets import Action_DATASETS, Action_DATASETS_orig
@@ -151,6 +151,7 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             image_features = fusion_model(image_features)
             logit_scale = 100.0
 
+            image_features_crp = torch.zeros_like(image_features)
             if config.data.lambda_cropped > 0:
                 b, t, c, h, w = cropped_videos.size()
                 image_input_crp = cropped_videos.to(device).view(-1, c, h, w)
@@ -158,9 +159,7 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
                 image_features_crp = image_features_crp.view(b,t,-1)
                 image_features_crp = fusion_model(image_features_crp)
 
-                logits_per_image, _ = create_cropped_logits(image_features, image_features_crp,config.data.lambda_orig, config.data.lambda_cropped,text_features,logit_scale)
-            else:
-                logits_per_image, _ = create_logits(image_features,text_features,logit_scale)
+            logits_per_image, _ = create_cropped_logits(image_features,text_features, image_features_crp,config.data.lambda_orig, config.data.lambda_cropped,logit_scale)
             
             similarity = calculate_similarity(logits_per_image, b, num_text_aug)
 

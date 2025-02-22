@@ -29,6 +29,7 @@ from prompt import PromptLoss, TextCLIP, ImageCLIP
 from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
+import modeling_florence2 as flor2
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 import torch
@@ -98,6 +99,8 @@ def train_classifier(start_epoch,
                      classes,
                      perceptor,
                      working_dir,
+                     processor,
+                     use_clip,
                      device):
     best_prec1 = -1
     cross_entropy = nn.CrossEntropyLoss()
@@ -107,7 +110,6 @@ def train_classifier(start_epoch,
     # scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, config.solver.epochs):
         model_image.train()
-        model_text.train()
         fusion_model.train()
 
         running_loss_all = 0
@@ -115,8 +117,13 @@ def train_classifier(start_epoch,
         running_ce = 0
         running_total = 0
 
-        text_inputs = classes.to(device)
-        text_features2 = perceptor.encode_text(text_inputs)
+        if use_clip:
+            text_inputs = classes.to(device)
+            with torch.no_grad():
+                text_features2 = model_text(text_inputs)
+            model_text.train()
+        else:
+            model_text.train()
         for kkk,data in enumerate(tqdm(train_loader)):
             if config.solver.type != 'monitor':
                 if (kkk+1) == 1 or (kkk+1) % 10 == 0:
@@ -130,7 +137,7 @@ def train_classifier(start_epoch,
             elif len(data) > 2:
                 cropped_videos, videos, list_id = data
                 videos = videos.to(device)
-                # list_id = list_id.to(device)
+                list_id = list_id.to(device)
                 cropped_videos = cropped_videos.view((-1,config.data.num_segments,3)+cropped_videos.size()[-2:])
             else:
                 videos, list_id = data
@@ -149,36 +156,40 @@ def train_classifier(start_epoch,
             # run through the prompt model and get the new results from the prompts
             if config.data.lambda_bb > 0:
                 loss_all, image_embedding, text_embedding = bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model)
-            else:
+            elif use_clip:
                 video_tensor = videos.view(-1,c,h,w )
                 image_embedding = model_image(video_tensor)
                 image_embedding = image_embedding.view(b,t,-1)
                 image_embedding = fusion_model(image_embedding)
                 
+                img_emb_crp = torch.zeros_like(image_embedding)
                 if config.data.lambda_cropped > 0:
                     video_tensor = cropped_videos.view(-1,c,h,w )
                     img_emb_crp = model_image(video_tensor)
                     img_emb_crp = img_emb_crp.view(b,t,-1)
                     img_emb_crp = fusion_model(img_emb_crp)
-
+                
                 text_embedding = model_text(texts)
 
-            if config.network.fix_text:
-                text_embedding.detach_()
+                if config.network.fix_text:
+                    text_embedding.detach_()
 
-            logit_scale = perceptor.logit_scale.exp()
-            if config.data.lambda_cropped > 0:
-                logits_per_image, logits_per_text = create_cropped_logits(image_embedding, img_emb_crp, config.data.lambda_orig, config.data.lambda_cropped, text_embedding,logit_scale)
+                logit_scale = perceptor.logit_scale.exp()
+                logits_per_image, logits_per_text = create_cropped_logits(image_embedding, text_embedding, img_emb_crp, config.data.lambda_orig, config.data.lambda_cropped,logit_scale)
+
+                generated_labels = gen_label(list_id)
+                ground_truth = torch.tensor(generated_labels)
+                ground_truth = ground_truth.to(dtype=image_embedding.dtype,device=device)
+                loss_imgs = loss_img(logits_per_image,ground_truth)
+                loss_texts = loss_txt(logits_per_text,ground_truth)
+                kl_loss = (loss_imgs + loss_texts)/2
             else:
-                logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
-            
-            generated_labels = gen_label(list_id)
-            ground_truth = torch.tensor(generated_labels)
-            ground_truth = ground_truth.to(dtype=image_embedding.dtype,device=device)
-            loss_imgs = loss_img(logits_per_image,ground_truth)
-            loss_texts = loss_txt(logits_per_text,ground_truth)
 
-            kl_loss = (loss_imgs + loss_texts)/2
+
+                logits = model_image(videos, texts)
+                print(logits.shape)
+                raise ValueError()
+
             total_loss = kl_loss
             running_kl += kl_loss.item()
             if config.data.lambda_bb > 0:
@@ -234,12 +245,12 @@ def main():
         config = yaml.safe_load(f)
     working_dir = os.path.join('./exp', config['network']['type'], config['network']['arch'], config['data']['dataset'], args.log_time)
     
-    seed = int(config['seed'])
-    torch.manual_seed(seed) 
-    torch.cuda.manual_seed(seed)  # For GPU operations
-    torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
-    random.seed(seed)
-    numpy.random.seed(seed) 
+    # seed = int(config['seed'])
+    # torch.manual_seed(seed) 
+    # torch.cuda.manual_seed(seed)  # For GPU operations
+    # torch.cuda.manual_seed_all(seed)  # If using multiple GPUs
+    # random.seed(seed)
+    # numpy.random.seed(seed) 
 
     wandb.init(project=config['network']['type'],name='{}_{}_{}_{}'.format(args.log_time,config['network']['type'], config['network']['arch'], config['data']['dataset']))
     print('-' * 80)
@@ -260,15 +271,29 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 
-    perceptor, clip_state_dict = clip.load(config.network.arch,
-                                           device=device,
-                                           jit=False,
-                                           tsm=config.network.tsm, 
-                                           T=config.data.num_segments,
-                                           dropout=config.network.drop_out, 
-                                           emb_dropout=config.network.emb_dropout,
-                                           pretrain=config.network.init, 
-                                           joint = config.network.joint) #Must set jit=False for training  ViT-B/32
+    use_clip = False
+    if use_clip:
+        perceptor, vlm_state_dict = clip.load(config.network.arch,
+                                            device=device,
+                                            jit=False,
+                                            tsm=config.network.tsm, 
+                                            T=config.data.num_segments,
+                                            dropout=config.network.drop_out, 
+                                            emb_dropout=config.network.emb_dropout,
+                                            pretrain=config.network.init, 
+                                            joint = config.network.joint) #Must set jit=False for training  ViT-B/32
+    else:
+        perceptor, vlm_state_dict, processor = flor2.load("BASE_FT", device)
+        processor.image_processor.crop_size['height'] = 112
+        processor.image_processor.crop_size['width'] = 112
+        processor.image_processor.size['height'] = 112
+        processor.image_processor.size['width'] = 112
+
+        vlm_state_dict["text_projection"] = torch.empty((1, perceptor.config.text_config.d_model))
+        vlm_state_dict["positional_embedding"] = torch.empty((perceptor.config.text_config.vocab_size,))
+        vlm_state_dict["ln_final.weight"] = torch.empty((perceptor.config.text_config.encoder_attention_heads*64,))
+
+
     transform_train = get_augmentation(True,config)
     transform_val = get_augmentation(False,config)
 
@@ -279,13 +304,18 @@ def main():
     # print('train transforms: {}'.format(transform_train.transforms))
     # print('val transforms: {}'.format(transform_val.transforms))
 
-    fusion_model = visual_prompt(config.network.sim_header,clip_state_dict,config.data.num_segments)
-    model_text = TextCLIP(perceptor)
-    model_image = ImageCLIP(perceptor)
+    fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
+    model_text = TextCLIP(perceptor, use_clip=use_clip)
+    if use_clip:
+        model_image = ImageCLIP(perceptor, use_clip=use_clip)
+    else:
+        model_text = model_text.to(device)
+        model_image = ImageCLIP(perceptor, use_clip=use_clip, processor=processor, fusion_model=fusion_model, model_text=model_text)
     # model_stan = stanet_af(layers=[2, 2, 2, 2], in_channels=2, num_classes=embed_dim, k=2, features=16)
     model_text = torch.nn.DataParallel(model_text).cuda()
     model_image = torch.nn.DataParallel(model_image).cuda()
     fusion_model = torch.nn.DataParallel(fusion_model).cuda()
+
     wandb.watch(perceptor)
     wandb.watch(fusion_model)
 
@@ -384,8 +414,9 @@ def main():
         model_text.float()
         model_image.float()
     else :
-        clip.model.convert_weights(model_text) # Actually this line is unnecessary since clip by default already on float16
-        clip.model.convert_weights(model_image)
+        if use_clip:
+            clip.model.convert_weights(model_text) # Actually this line is unnecessary since clip by default already on float16
+            clip.model.convert_weights(model_image)
 
     loss_img = KLLoss()
     loss_txt = KLLoss()
@@ -436,7 +467,7 @@ def main():
     # for k,v in model.named_parameters():
     #     print('{}: {}'.format(k, v.requires_grad))
 
-    optimizer = _optimizer(config, perceptor, fusion_model)
+    optimizer = _optimizer(config, perceptor, fusion_model, use_clip)
     lr_scheduler = _lr_scheduler(config, optimizer)
 
     promptCrit = pl2(perceptor, replace_grad, im_emb_type=config.data.im_emb_type).to(device)
@@ -459,6 +490,8 @@ def main():
                      classes = classes,
                      perceptor = perceptor,
                      working_dir = working_dir,
+                     use_clip = use_clip,
+                     processor=processor,
                      device = device)
 
 

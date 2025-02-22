@@ -46,6 +46,7 @@ from urllib.request import urlopen
 # import taming.models.vqgan as vqgan
 # import external.TransformerMMExplainability
 # import CLIP.clip as clip
+from modeling_florence2 import shift_tokens_right
 
 ######################################
 import os
@@ -77,20 +78,91 @@ from helpers import ReplaceGrad
 from helpers import *
 
 class TextCLIP(nn.Module):
-    def __init__(self, model) :
+    def __init__(self, model, use_clip=True) :
         super(TextCLIP, self).__init__()
-        self.model = model
+        if use_clip:
+            self.model = model
+            self.forward_method = self.clip_forward
+        else:
+            self.model = model.language_model
+            self.forward_method = self.flo_forward
+            self.model_config = self.model.config
 
-    def forward(self,text):
+    def clip_forward(self, text, arg2=None, arg3=None):
         return self.model.encode_text(text)
 
+    def flo_forward(self, image_embedding, attention_mask, labels):
+        output = self.model(
+            attention_mask=attention_mask,
+            inputs_embeds=image_embedding,
+            labels=labels
+        )
+        return output
+
+    def forward(self,arg1,arg2=None, arg3=None):
+        return self.forward_method(arg1,arg2,arg3)
+
 class ImageCLIP(nn.Module):
-    def __init__(self, model) :
+    def __init__(self, model, use_clip, processor=None, fusion_model=None, model_text=None) :
         super(ImageCLIP, self).__init__()
         self.model = model
+        self.language_model = model.language_model
+        if use_clip:
+            self.forward_method = self.clip_forward
+        else:
+            self.forward_method = self.flo_forward
+        self.processor = processor
+        self.fusion_model = fusion_model
+        self.model_text = model_text
 
-    def forward(self,image):
+    def clip_forward(self, image, args2=None):
         return self.model.encode_image(image)
+
+    def flo_forward(self, videos, texts):
+        b,d,t,c,h,w = videos.size()
+        images = videos.view(-1,c,h,w )
+        text=['<OD>' for i in range(images.shape[0])]
+        images = [transforms.functional.to_pil_image(image) for image in images]
+        # text2 = self.processor(text=text, do_resize=True, return_tensors="pt")['input_ids']
+        inputs = self.processor(text=text, images=images, do_resize=True, return_tensors="pt")
+        # inputs = inputs.to(device)
+        pixel_values = inputs['pixel_values'] #.to(device)
+        input_ids = inputs['input_ids'] #.to(device)
+        
+        input_ids = input_ids.to(device=self.model.device)
+        pixel_values = pixel_values.to(device=self.model.device, dtype=self.model.dtype)
+        # 1. Extra the input embeddings
+        if input_ids is not None:
+            inputs_embeds = self.model.get_input_embeddings()
+            inputs_embeds = inputs_embeds(input_ids)
+        # 2. Merge text and images
+        if pixel_values is not None:
+            image_features = self.model._encode_image(pixel_values)
+            inputs_embeds, attention_mask = self.model._merge_input_ids_with_image_features(image_features, inputs_embeds)
+        
+        attention_mask = attention_mask[::8]
+
+        i_n, i_c, i_e = inputs_embeds.shape
+        inputs_embeds = inputs_embeds.view(b,t,i_c,-1)
+        inputs_embeds = inputs_embeds.permute(0, 2, 1, 3)
+        inputs_embeds = inputs_embeds.reshape(-1,t,inputs_embeds.shape[-1])
+        inputs_embeds = self.fusion_model(inputs_embeds)
+        inputs_embeds = inputs_embeds.view(b,i_c,-1)
+        
+        inputs_embeds = inputs_embeds.to(device=texts.get_device())
+        attention_mask = attention_mask.to(device=texts.get_device())
+        print(f'DEVICE: {attention_mask.get_device()} {inputs_embeds.get_device()} {texts.get_device()}')
+        # logits = self.model_text(inputs_embeds, attention_mask, texts)
+        
+        logits = self.language_model(
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            labels=texts
+        )
+        return logits
+
+    def forward(self,image,input_ids=None):
+        return self.forward_method(image, input_ids)
 
 class PromptLoss(nn.Module):
     def __init__(self, text, perceptor, replace_grad):

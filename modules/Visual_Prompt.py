@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from collections import OrderedDict
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
+import math
 
 class LayerNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-12):
@@ -115,19 +116,23 @@ class visual_prompt(nn.Module):
         assert sim_head in ["meanP", "LSTM", "Transf", "Conv_1D", "Transf_cls"]
 
         if self.sim_header == "LSTM" or self.sim_header == "Transf" or self.sim_header == "Transf_cls" or self.sim_header == "Conv_1D":
+            # import pdb; pdb.set_trace()
             embed_dim = clip_state_dict["text_projection"].shape[1]
 
             if double_embedding:
                 embed_dim *= 2
 
             context_length = clip_state_dict["positional_embedding"].shape[0]
-            vocab_size = clip_state_dict["token_embedding.weight"].shape[0]
+            # vocab_size = clip_state_dict["token_embedding.weight"].shape[0]
             transformer_width = clip_state_dict["ln_final.weight"].shape[0]
             transformer_heads = transformer_width // 64
 
             transformer_layers = len(
                 set(k.split(".")[2] for k in clip_state_dict if k.startswith(f"transformer.resblocks")))
 
+            # FIXME: Magic numbers
+            # embed_dim2 = (13+(math.ceil(math.sqrt((112*112)//1024))**2+1))*embed_dim
+            # print(f'DEBUG {context_length} {embed_dim2} {transformer_heads}')
             self.frame_position_embeddings = nn.Embedding(context_length, embed_dim)
         if self.sim_header == "Transf" :
             self.transformer = TemporalTransformer(width=embed_dim, layers=6, heads=transformer_heads)
