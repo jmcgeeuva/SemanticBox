@@ -99,6 +99,7 @@ class Action_DATASETS(data.Dataset):
                  expl_loss_weight: float = 0.15,
                  expl_weight_according_to_mask_ratio: bool = True,
                  label_box: bool=False, 
+                 windows_path: str='',
                  debug: bool=False):
 
         self.list_file = list_file
@@ -117,6 +118,7 @@ class Action_DATASETS(data.Dataset):
         self.model_resolution = model_resolution
         self.expl_loss_weight = expl_loss_weight
         self.expl_weight_according_to_mask_ratio = expl_weight_according_to_mask_ratio
+        self.windows_path = windows_path
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -130,7 +132,12 @@ class Action_DATASETS(data.Dataset):
         self.target_transform = target_transform
 
     def _load_image(self, directory, idx):
-        return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
+        if not self.windows_path:
+            return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
+        else:
+            image_path = os.path.join(self.windows_path, directory, self.image_tmpl.format(idx))
+            image_path = os.path.normpath(image_path)
+            return [Image.open(image_path).convert('RGB')]
     
     def _load_teacher_box(self, annotation, idx):
         box = []
@@ -273,8 +280,14 @@ class Action_DATASETS(data.Dataset):
         masks = list()
         lambdas = list()
         
-        with open(os.path.join(record.path, 'annotation.json')) as f:
-            annotation = json.load(f, object_pairs_hook=OrderedDict)
+        if not self.windows_path:
+            with open(os.path.join(record.path, 'annotation.json')) as f:
+                annotation = json.load(f, object_pairs_hook=OrderedDict)
+        else:
+            annotation_path = os.path.join(self.windows_path, record.path, 'annotation.json')
+            annotation_path = os.path.normpath(annotation_path)
+            with open(annotation_path) as f:
+                annotation = json.load(f, object_pairs_hook=OrderedDict)
 
         for i, seg_ind in enumerate(indices):
             p = int(seg_ind)
@@ -318,7 +331,7 @@ class Action_DATASETS_orig(data.Dataset):
                  image_tmpl='img_{:05d}.jpg', transform=None,
                  random_shift=True, test_mode=False, index_bias=1, 
                  height=224, width=224, label_box=False, debug=False,
-                 bounding_boxes=True):
+                 bounding_boxes=True, windows_path = None):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -335,6 +348,7 @@ class Action_DATASETS_orig(data.Dataset):
         self.label_box = label_box
         self.debug = debug
         self.bounding_boxes = bounding_boxes
+        self.windows_path = windows_path
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -345,8 +359,12 @@ class Action_DATASETS_orig(data.Dataset):
         self.initialized = False
 
     def _load_image(self, directory, idx):
-
-        return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
+        if not self.windows_path:
+            return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
+        else:
+            image_path = os.path.join(self.windows_path, directory, self.image_tmpl.format(idx))
+            image_path = os.path.normpath(image_path)
+            return [Image.open(image_path).convert('RGB')]
     
     def _load_teacher_box(self, annotation, idx):
         box = []
@@ -460,8 +478,14 @@ class Action_DATASETS_orig(data.Dataset):
         images = list()
         bbs = list()
         
-        with open(os.path.join(record.path, 'annotation.json')) as f:
-            annotation = json.load(f, object_pairs_hook=OrderedDict)
+        if not self.windows_path:
+            with open(os.path.join(record.path, 'annotation.json')) as f:
+                annotation = json.load(f, object_pairs_hook=OrderedDict)
+        else:
+            annotation_path = os.path.join(self.windows_path, record.path, 'annotation.json')
+            annotation_path = os.path.normpath(annotation_path)
+            with open(annotation_path) as f:
+                annotation = json.load(f, object_pairs_hook=OrderedDict)
 
         for i, seg_ind in enumerate(indices):
             p = int(seg_ind)

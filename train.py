@@ -199,15 +199,15 @@ def train_classifier(start_epoch,
             if config.data.use_orig:
                 logits_per_image_orig, logits_per_text_orig = create_logits(image_emb_orig,text_embedding,logit_scale)
             
-            if lambda_ce != 0:
-                text_inputs = classes.to(device)
-                text_features2 = perceptor.encode_text(text_inputs)
-                logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
-                logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
-                similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
-                similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
-                list_id = list_id.to(device)
-                ce_loss = cross_entropy(similarity+similarity_orig, list_id)
+            # if lambda_ce != 0:
+            #     text_inputs = classes.to(device)
+            #     text_features2 = perceptor.encode_text(text_inputs)
+            #     logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
+            #     logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
+            #     similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
+            #     similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
+            #     list_id = list_id.to(device)
+            #     ce_loss = cross_entropy(similarity+similarity_orig, list_id)
 
 
             ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
@@ -225,12 +225,12 @@ def train_classifier(start_epoch,
                 kl_loss = (loss_imgs + loss_texts)/2
             total_loss = kl_loss
             running_kl += kl_loss.item()
-            if lambda_bb > 0:
-                total_loss += lambda_bb*loss_all
-                running_loss_all += loss_all.item()
-            if lambda_ce > 0:
-                total_loss += lambda_ce*ce_loss
-                running_ce += ce_loss.item()
+            # if lambda_bb > 0:
+            #     total_loss += lambda_bb*loss_all
+            #     running_loss_all += loss_all.item()
+            # if lambda_ce > 0:
+            #     total_loss += lambda_ce*ce_loss
+            #     running_ce += ce_loss.item()
             running_total += total_loss.item()
 
             wandb.log({"train_total_loss": total_loss})
@@ -355,6 +355,7 @@ def main():
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
                         random_shift=config.data.random_shift,
+                        windows_path = config.windows_path,
                         image_transform=transform_train)
         train_loader = DataLoader(
                         train_data,
@@ -370,6 +371,7 @@ def main():
                         random_shift=False,
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
+                        windows_path = config.windows_path,
                         image_transform=transform_val)
         val_loader = DataLoader(
                         val_data,
@@ -394,6 +396,7 @@ def main():
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
                         random_shift=config.data.random_shift,
+                        windows_path = config.windows_path,
                         transform=transform_train)
         train_loader = DataLoader(
                         train_data,
@@ -409,6 +412,7 @@ def main():
                         random_shift=False,
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
+                        windows_path = config.windows_path,
                         transform=transform_val)
         val_loader = DataLoader(
                         val_data,
