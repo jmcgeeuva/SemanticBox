@@ -121,7 +121,6 @@ class visual_prompt(nn.Module):
             context_length = clip_state_dict["positional_embedding"].shape[0]
             transformer_width = clip_state_dict["ln_final.weight"].shape[0]
             transformer_heads = transformer_width // 64
-
             # transformer_layers = len(set(k.split(".")[2] for k in clip_state_dict if k.startswith(f"transformer.resblocks")))
 
             # FIXME: Magic numbers

@@ -924,7 +924,7 @@ class Florence2LanguageModel(Florence2LanguagePreTrainedModel):
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
 
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
@@ -1053,6 +1053,7 @@ class Florence2LanguageForConditionalGeneration(Florence2LanguagePreTrainedModel
             return_dict=return_dict,
         )
 
+        # import pdb; pdb.set_trace()
         lm_logits = self.lm_head(outputs[0])
         lm_logits = lm_logits + self.final_logits_bias.to(lm_logits.device)
 

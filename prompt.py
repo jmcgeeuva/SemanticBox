@@ -114,27 +114,37 @@ class ImageCLIP(nn.Module):
         return self.clip_forward(image, input_ids)
 
 class ImageFlorence(nn.Module):
-    def __init__(self, model, use_clip, processor=None, config=None, vlm_state_dict=None) :
+    def __init__(self, model, use_clip, transformer_width=51289, embed_dim=51289, processor=None, config=None, vlm_state_dict=None) :
         super(ImageFlorence, self).__init__()
         self.model = model
         self.language_model = model.language_model
         self.processor = processor
+        self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
         self.fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
         self.model_text = TextCLIP(model, use_clip=use_clip)
+        self.transformer_width = transformer_width
+        self.initialize_parameters()
 
-    def flo_forward(self, videos, texts):
+    def initialize_parameters(self):
+        if self.text_projection is not None:
+            nn.init.normal_(self.text_projection, std=self.transformer_width ** -0.5)
+
+    def flo_forward(self, videos, texts, classes):
         b,d,t,c,h,w = videos.size()
         images = videos.view(-1,c,h,w )
-        text=['<OD>' for i in range(images.shape[0])]
+        text = []
+        for i, v in enumerate(classes):
+            caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #
+            text.extend(caption)
         images = [transforms.functional.to_pil_image(image) for image in images]
-        # text2 = self.processor(text=text, do_resize=True, return_tensors="pt")['input_ids']
-        inputs = self.processor(text=text, images=images, do_resize=True, return_tensors="pt")
-        # inputs = inputs.to(device)
-        pixel_values = inputs['pixel_values'] #.to(device)
-        input_ids = inputs['input_ids'] #.to(device)
+
+        inputs = self.processor(text=text, images=images, padding=True, do_resize=True, return_tensors="pt")
+        pixel_values = inputs['pixel_values']
+        input_ids = inputs['input_ids']
         
         input_ids = input_ids.to(device=self.model.device)
         pixel_values = pixel_values.to(device=self.model.device, dtype=self.model.dtype)
+        
         # 1. Extra the input embeddings
         if input_ids is not None:
             inputs_embeds = self.model.get_input_embeddings()
@@ -152,22 +162,30 @@ class ImageFlorence(nn.Module):
         inputs_embeds = inputs_embeds.reshape(-1,t,inputs_embeds.shape[-1])
         inputs_embeds = self.fusion_model(inputs_embeds)
         inputs_embeds = inputs_embeds.view(b,i_c,-1)
+
+        image_embedding = image_features.view(b, -1, image_features.shape[-1])
+        image_embedding = image_embedding.mean(dim=1)
+        # TODO add embedding to expand from 768 to context length
         
         inputs_embeds = inputs_embeds.to(device=texts.get_device())
         attention_mask = attention_mask.to(device=texts.get_device())
         print(f'DEVICE: {attention_mask.get_device()} {inputs_embeds.get_device()} {texts.get_device()}')
         # logits = self.model_text(inputs_embeds, attention_mask, texts)
         
-        import pdb; pdb.set_trace()
         logits = self.language_model(
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             labels=texts
         )
-        return logits, image_features
+        image_embedding = self.language_model.lm_head(image_embedding)
+        text_embedding = logits.logits.float()
+        text_embedding = text_embedding[torch.arange(text_embedding.shape[0]), texts.argmax(dim=-1)]
+        text_embedding = text_embedding @ self.text_projection.to(text_embedding.get_device())
 
-    def forward(self,image,input_ids=None):
-        return self.flo_forward(image, input_ids)
+        return image_embedding, text_embedding, logits.loss
+
+    def forward(self,image,input_ids,classes):
+        return self.flo_forward(image, input_ids, classes)
 
 class PromptLoss(nn.Module):
     def __init__(self, text, perceptor, replace_grad):

@@ -25,7 +25,7 @@ import CLIP.clip as clip
 #     return classes, num_text_aug,text_dict
 
 
-def text_prompt(data, file_name='text_aug1.txt'):
+def text_prompt(data, use_clip=True, file_name='text_aug1.txt'):
     text_aug = []
     with open(file_name, 'r') as f:
         for line in f:
@@ -33,14 +33,21 @@ def text_prompt(data, file_name='text_aug1.txt'):
 
     num_text_aug = len(text_aug)
 
-    text_dict = {}
-    if 'longest' in file_name:
-        for ii, txt in enumerate(text_aug):
-            text_dict[ii] = torch.cat([clip.tokenize(txt.format(c, c)) for i, c in data.classes])
+    if use_clip or not use_clip:
+        text_dict = {}
+        text_str = {}
+        if 'longest' in file_name:
+            for ii, txt in enumerate(text_aug):
+                text_str[ii] = [txt.format(c, c) for i, c in data.classes]
+                text_dict[ii] = torch.cat([clip.tokenize(txt.format(c, c)) for i, c in data.classes])
+        else:
+            for ii, txt in enumerate(text_aug):
+                text_str[ii] = [txt.format(c, c) for i, c in data.classes]
+                text_dict[ii] = torch.cat([clip.tokenize(txt.format(c)) for i, c in data.classes])
     else:
-        for ii, txt in enumerate(text_aug):
-            text_dict[ii] = torch.cat([clip.tokenize(txt.format(c)) for i, c in data.classes])
+        print('Under Construction')
+        raise ValueError()
 
     classes = torch.cat([v for k, v in text_dict.items()])
 
-    return classes, num_text_aug,text_dict
+    return classes, num_text_aug,text_dict, text_str

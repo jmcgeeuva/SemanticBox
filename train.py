@@ -89,6 +89,7 @@ def train_classifier(start_epoch,
                      lr_scheduler,
                      config, 
                      text_dict,
+                     text_str,
                      model_image, 
                      model_text, 
                      fusion_model, 
@@ -119,9 +120,9 @@ def train_classifier(start_epoch,
         running_total = 0
 
         if use_clip:
-            text_inputs = classes.to(device)
-            with torch.no_grad():
-                text_features2 = model_text(text_inputs)
+            # text_inputs = classes.to(device)
+            # with torch.no_grad():
+            #     text_features2 = model_text(text_inputs)
             model_text.train()
         # else:
         #     model_text.train()
@@ -148,6 +149,7 @@ def train_classifier(start_epoch,
             
             text_id = numpy.random.randint(num_text_aug,size=len(list_id))
             texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
+            text_strs = [text_str[j][i] for i,j in zip(list_id,text_id)]
 
             cropped_videos= cropped_videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
             texts = texts.to(device)
@@ -171,6 +173,7 @@ def train_classifier(start_epoch,
                     img_emb_crp = fusion_model(img_emb_crp)
                 
                 text_embedding = model_text(texts)
+                import pdb; pdb.set_trace()
 
                 if config.network.fix_text:
                     text_embedding.detach_()
@@ -189,30 +192,17 @@ def train_classifier(start_epoch,
                 print(videos.get_device())
                 print(texts.get_device())
                 print(next(model_image.parameters()).device)
-                import pdb; pdb.set_trace()
-                outputs, image_features = model_image(videos, texts)
+                image_embedding, text_embedding, flo_loss = model_image(videos, texts, text_strs)
 
-                logits = outputs.logits
-                logits = logits.float()
-                loss = outputs.loss
-                # if not return_dict:
-                #     output = (logits,) + outputs[1:]
-                #     return (loss,) + output if loss is not None else output
+                logit_scale = 100.0 #perceptor.logit_scale.exp()
+                logits_per_image, logits_per_text = create_logits(image_embedding, text_embedding, logit_scale)
 
-                res = flor2.Florence2Seq2SeqLMOutput(
-                    loss=loss,
-                    logits=logits,
-                    past_key_values=outputs.past_key_values,
-                    decoder_hidden_states=outputs.decoder_hidden_states,
-                    decoder_attentions=outputs.decoder_attentions,
-                    cross_attentions=outputs.cross_attentions,
-                    encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-                    encoder_hidden_states=outputs.encoder_hidden_states,
-                    encoder_attentions=outputs.encoder_attentions,
-                    image_hidden_states=image_features
-                )
-                print(res.logits.shape)
-                raise ValueError()
+                generated_labels = gen_label(list_id)
+                ground_truth = torch.tensor(generated_labels)
+                ground_truth = ground_truth.to(dtype=image_embedding.dtype,device=device)
+                loss_imgs = loss_img(logits_per_image,ground_truth)
+                loss_texts = loss_txt(logits_per_text,ground_truth)
+                kl_loss = (loss_imgs + loss_texts)/2
 
             total_loss = kl_loss
             running_kl += kl_loss.item()
@@ -239,10 +229,13 @@ def train_classifier(start_epoch,
                 optimizer.step()
                 # optimizer.step()
             else:
-                convert_models_to_fp32(perceptor)
-                optimizer.step()
-                # optimizer.step()
-                clip.model.convert_weights(perceptor)
+                if use_clip:
+                    convert_models_to_fp32(perceptor)
+                    optimizer.step()
+                    # optimizer.step()
+                    clip.model.convert_weights(perceptor)
+                else:
+                    optimizer.step()
 
             # scaler.update()
 
@@ -473,7 +466,7 @@ def main():
         else:
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
-    classes, num_text_aug, text_dict = text_prompt(train_data, file_name=config.prompt)
+    classes, num_text_aug, text_dict, text_str = text_prompt(train_data, file_name=config.prompt)
 
     replace_grad = ReplaceGrad.apply
     # 1. Compile a proper list of the classes with label numbers
@@ -507,6 +500,7 @@ def main():
                      lr_scheduler = lr_scheduler,
                      config = config, 
                      text_dict = text_dict,
+                     text_str = text_str,
                      model_image = model_image, 
                      model_text = model_text, 
                      fusion_model = fusion_model, 
