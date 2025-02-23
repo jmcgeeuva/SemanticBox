@@ -295,7 +295,7 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu" # If using GPU then use mixed precision training.
 
-    use_clip = True
+    use_clip = config.use_clip
     if use_clip:
         perceptor, vlm_state_dict = clip.load(config.network.arch,
                                             device=device,

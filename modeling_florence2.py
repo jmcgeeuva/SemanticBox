@@ -924,6 +924,7 @@ class Florence2LanguageModel(Florence2LanguagePreTrainedModel):
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
 
+        import pdb; pdb.set_trace()
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
@@ -1033,7 +1034,7 @@ class Florence2LanguageForConditionalGeneration(Florence2LanguagePreTrainedModel
                     labels, self.config.pad_token_id, self.config.decoder_start_token_id
                 )
 
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         outputs = self.model(
             input_ids,
             attention_mask=attention_mask,

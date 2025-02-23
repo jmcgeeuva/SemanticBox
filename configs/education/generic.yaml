@@ -4,6 +4,7 @@ seed: 1737328734
 prompt: './prompts/generic_prompts.txt'
 use_calc_norm: False
 windows_path: 'Z:\\NeuralNetworksProjectVideos\\Data Science Competition\\Bounding_McGee\\'
+use_clip: False
 data:
     dataset: education6
     modality: RGB
