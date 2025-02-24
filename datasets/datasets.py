@@ -345,7 +345,7 @@ class Action_DATASETS_orig(data.Dataset):
         self.initialized = False
 
     def _load_image(self, directory, idx):
-        if self.windows_path == None:
+        if self.windows_path == 'None':
             return [Image.open(os.path.join(directory, self.image_tmpl.format(idx))).convert('RGB')]
         else:
             image_path = os.path.join(self.windows_path, directory, self.image_tmpl.format(idx))
@@ -464,7 +464,7 @@ class Action_DATASETS_orig(data.Dataset):
         images = list()
         bbs = list()
         
-        if self.windows_path:
+        if self.windows_path != 'None':
             annotation_path = os.path.join(self.windows_path, record.path, 'annotation.json')
             annotation_path = os.path.normpath(annotation_path)
             with open(annotation_path) as f:

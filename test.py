@@ -105,14 +105,19 @@ class ImageCLIP(nn.Module):
         return self.model.encode_image(image)
 
 def calculate_similarity(logits_per_image, b, num_text_aug):
-    similarity = logits_per_image.view(b, num_text_aug, -1).softmax(dim=-1)
+    similarity = logits_per_image.view(logits_per_image.shape[0], num_text_aug, -1)
+    similarity = similarity.softmax(dim=-1)
     similarity = similarity.mean(dim=1, keepdim=False)
+    similarity = similarity.view(b, logits_per_image.shape[0]//num_text_aug, -1)
+    similarity = similarity.softmax(dim=-1)
+    similarity = similarity.mean(dim=1, keepdim=False) 
     return similarity
 
 
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, print_figures=False):
+def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, use_clip, text_str, print_figures=False):
     model.eval()
-    fusion_model.eval()
+    if use_clip:
+        fusion_model.eval()
     num = 0
     corr_1 = 0
     corr_5 = 0
@@ -123,10 +128,17 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
     correct_list = []
     idx_list = []
     with torch.no_grad():
-        text_inputs = classes.to(device)
-        # only needs to be done once because it never changes
-        text_features = model.encode_text(text_inputs)
-        text_features /= text_features.norm(dim=-1, keepdim=True)
+        if use_clip:
+            text_inputs = classes.to(device)
+            # only needs to be done once because it never changes
+            text_features = model.encode_text(text_inputs)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+        else:
+            texts = classes.to(device)
+            text_strs = []
+            for k, v in text_str.items():
+                text_strs.extend(v)
+
         for iii, data in enumerate(tqdm(val_loader)):
             if len(data) > 3:
                 videos, aug_masks, lambdas, class_id = data
@@ -143,26 +155,44 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
                 videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
 
             # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
-            videos = videos.squeeze(dim=1)
-            b, t, c, h, w = videos.size()
-            image_input = videos.to(device).view(-1, c, h, w)
-            image_features = model.encode_image(image_input)
-            image_features = image_features.view(b,t,-1)
-            image_features = fusion_model(image_features)
-            logit_scale = 100.0
+            if use_clip:
+                videos = videos.squeeze(dim=1)
+                b, t, c, h, w = videos.size()
+                image_input = videos.to(device).view(-1, c, h, w)
+                image_features = model.encode_image(image_input)
+                image_features = image_features.view(b,t,-1)
+                image_features = fusion_model(image_features)
+                logit_scale = 100.0
 
-            image_features_crp = torch.zeros_like(image_features)
-            if config.data.lambda_cropped > 0:
-                b, t, c, h, w = cropped_videos.size()
-                image_input_crp = cropped_videos.to(device).view(-1, c, h, w)
-                image_features_crp = model.encode_image(image_input_crp)
-                image_features_crp = image_features_crp.view(b,t,-1)
-                image_features_crp = fusion_model(image_features_crp)
+                image_features_crp = torch.zeros_like(image_features)
+                if config.data.lambda_cropped > 0:
+                    b, t, c, h, w = cropped_videos.size()
+                    image_input_crp = cropped_videos.to(device).view(-1, c, h, w)
+                    image_features_crp = model.encode_image(image_input_crp)
+                    image_features_crp = image_features_crp.view(b,t,-1)
+                    image_features_crp = fusion_model(image_features_crp)
 
-            logits_per_image, _ = create_cropped_logits(image_features,text_features, image_features_crp,config.data.lambda_orig, config.data.lambda_cropped,logit_scale)
-            
+                logits_per_image, _ = create_cropped_logits(image_features,text_features, image_features_crp,config.data.lambda_orig, config.data.lambda_cropped,logit_scale)
+            else:
+                videos = videos.squeeze(dim=1)
+                b, t, c, h, w = videos.size()
+                expand_vid = torch.empty((len(text_strs), t, c, h, w), dtype=videos.dtype)
+                num_classes = len(text_strs)//b
+                for i, video in enumerate(videos):
+                    for j in range(num_classes):
+                        expand_vid[j+i*num_classes] = video
+
+                image_features, text_embedding, flo_loss = model(expand_vid, texts, text_strs, debug=False)
+                
+                image_embedding = image_features.view(len(text_strs), -1, image_features.shape[-1])
+                image_embedding = image_embedding.mean(dim=1)
+                # TODO add embedding to expand from 768 to context length
+                image_embedding = model.language_model.lm_head(image_embedding)
+
+                logit_scale = 100.0 #perceptor.logit_scale.exp()
+                logits_per_image, _ = create_logits(image_embedding, text_embedding, logit_scale)
+
             similarity = calculate_similarity(logits_per_image, b, num_text_aug)
-
             values_1, indices_1 = similarity.topk(1, dim=-1)
             values_5, indices_5 = similarity.topk(5, dim=-1)
             num += b

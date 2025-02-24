@@ -129,13 +129,14 @@ class ImageFlorence(nn.Module):
         if self.text_projection is not None:
             nn.init.normal_(self.text_projection, std=self.transformer_width ** -0.5)
 
-    def flo_forward(self, videos, texts, classes):
-        b,d,t,c,h,w = videos.size()
+    def flo_forward(self, videos, texts, classes, debug=False):
+        b,t,c,h,w = videos.size()
         images = videos.view(-1,c,h,w )
         text = []
         for i, v in enumerate(classes):
             caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #
             text.extend(caption)
+
         images = [transforms.functional.to_pil_image(image) for image in images]
 
         inputs = self.processor(text=text, images=images, padding=True, do_resize=True, return_tensors="pt")
@@ -160,32 +161,33 @@ class ImageFlorence(nn.Module):
         inputs_embeds = inputs_embeds.view(b,t,i_c,-1)
         inputs_embeds = inputs_embeds.permute(0, 2, 1, 3)
         inputs_embeds = inputs_embeds.reshape(-1,t,inputs_embeds.shape[-1])
+        # inputs_embeds = inputs_embeds.mean(dim=2)
+        # FIXME play with how this is run and how we get temporal understanding (maybe move to before image embedding)
         inputs_embeds = self.fusion_model(inputs_embeds)
         inputs_embeds = inputs_embeds.view(b,i_c,-1)
-
-        image_embedding = image_features.view(b, -1, image_features.shape[-1])
-        image_embedding = image_embedding.mean(dim=1)
-        # TODO add embedding to expand from 768 to context length
         
         inputs_embeds = inputs_embeds.to(device=texts.get_device())
         attention_mask = attention_mask.to(device=texts.get_device())
-        print(f'DEVICE: {attention_mask.get_device()} {inputs_embeds.get_device()} {texts.get_device()}')
+        # print(f'DEVICE: {attention_mask.get_device()} {inputs_embeds.get_device()} {texts.get_device()}')
         # logits = self.model_text(inputs_embeds, attention_mask, texts)
         
-        logits = self.language_model(
-            attention_mask=attention_mask,
-            inputs_embeds=inputs_embeds,
-            labels=texts
-        )
-        image_embedding = self.language_model.lm_head(image_embedding)
+        # FIXME add booleans to the config that turn on and off the freezing of certain sections
+        # Make a DETAILED diagram of how Florence-2 is setup (Attention and all with class names)
+        with torch.no_grad():
+            logits = self.language_model(
+                attention_mask=attention_mask,
+                inputs_embeds=inputs_embeds,
+                labels=texts
+            )
+        
         text_embedding = logits.logits.float()
         text_embedding = text_embedding[torch.arange(text_embedding.shape[0]), texts.argmax(dim=-1)]
         text_embedding = text_embedding @ self.text_projection.to(text_embedding.get_device())
 
-        return image_embedding, text_embedding, logits.loss
+        return image_features, text_embedding, logits.loss
 
-    def forward(self,image,input_ids,classes):
-        return self.flo_forward(image, input_ids, classes)
+    def forward(self,image,input_ids,classes,debug=False):
+        return self.flo_forward(image, input_ids, classes, debug=debug)
 
 class PromptLoss(nn.Module):
     def __init__(self, text, perceptor, replace_grad):
@@ -209,9 +211,9 @@ class PromptLoss(nn.Module):
 
     def spatial_explainability_loss(self, input_image, mask, token_text):
         batch_size = input_image.shape[0]
-        print(input_image.shape,token_text.shape)
+        # print(input_image.shape,token_text.shape)
         text = token_text.repeat(batch_size, 1)
-        print(text.shape)
+        # print(text.shape)
         raise ValueError("test")
         index = [i for i in range(batch_size)]
         clip_c = self.perceptor_model.logit_scale.exp()
@@ -278,7 +280,7 @@ class PromptLoss(nn.Module):
         masked_input = input_img * mask.to(input_img.device)
         masked_input = torch.cat([input_img, masked_input], dim=0)
 
-        print(self.tokenized_text.shape)
+        # print(self.tokenized_text.shape)
         expl_loss = self.spatial_explainability_loss(input_img, mask, self.tokenized_text)
         expl_loss = expl_loss * dynamic_lambda
 
@@ -286,7 +288,7 @@ class PromptLoss(nn.Module):
         # input = input.to(clip_device)
         input_normed = F.normalize(image_embedding.unsqueeze(1), dim=2)
 
-        print(self.tokenized_text.shape)
+        # print(self.tokenized_text.shape)
         embed = self.perceptor_model.encode_text(self.tokenized_text).float()
         raise ValueError("test")
         embed_normed = F.normalize(embed.unsqueeze(0), dim=2)

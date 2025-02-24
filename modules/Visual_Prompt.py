@@ -181,9 +181,9 @@ class visual_prompt(nn.Module):
             seq_length = t
             position_ids = torch.arange(seq_length, dtype=torch.long, device=x.device)
             position_ids = position_ids.unsqueeze(0).expand(x.size(0), -1)
-            print(position_ids.get_device())
+            # print(position_ids.get_device())
             self.frame_position_embeddings = self.frame_position_embeddings.to(device=position_ids.get_device())
-            print(next(self.frame_position_embeddings.parameters()).device)
+            # print(next(self.frame_position_embeddings.parameters()).device)
             frame_position_embeddings = self.frame_position_embeddings(position_ids)
             x = x + frame_position_embeddings
 

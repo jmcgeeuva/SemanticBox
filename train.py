@@ -34,6 +34,9 @@ import modeling_florence2 as flor2
 
 import torch
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
     # keys = sorted(list(label_names.keys()))
     res = {}
@@ -187,12 +190,20 @@ def train_classifier(start_epoch,
                 loss_imgs = loss_img(logits_per_image,ground_truth)
                 loss_texts = loss_txt(logits_per_text,ground_truth)
                 kl_loss = (loss_imgs + loss_texts)/2
+                total_loss = kl_loss
+                running_kl += kl_loss.item()
             else:
 
-                print(videos.get_device())
-                print(texts.get_device())
-                print(next(model_image.parameters()).device)
-                image_embedding, text_embedding, flo_loss = model_image(videos, texts, text_strs)
+                # print(videos.get_device())
+                # print(texts.get_device())
+                # print(next(model_image.parameters()).device)
+                videos = videos.squeeze(dim=1)
+                image_features, text_embedding, flo_loss = model_image(videos, texts, text_strs)
+                
+                image_embedding = image_features.view(b, -1, image_features.shape[-1])
+                image_embedding = image_embedding.mean(dim=1)
+                # TODO add embedding to expand from 768 to context length
+                image_embedding = model_image.language_model.lm_head(image_embedding)
 
                 logit_scale = 100.0 #perceptor.logit_scale.exp()
                 logits_per_image, logits_per_text = create_logits(image_embedding, text_embedding, logit_scale)
@@ -203,9 +214,11 @@ def train_classifier(start_epoch,
                 loss_imgs = loss_img(logits_per_image,ground_truth)
                 loss_texts = loss_txt(logits_per_text,ground_truth)
                 kl_loss = (loss_imgs + loss_texts)/2
+                total_loss = kl_loss
+                total_loss += flo_loss
+                running_kl += kl_loss.item()
+                running_ce += .001*flo_loss.item()
 
-            total_loss = kl_loss
-            running_kl += kl_loss.item()
             if config.data.lambda_bb > 0:
                 total_loss += config.data.lambda_bb*loss_all
                 running_loss_all += loss_all.item()
@@ -240,7 +253,10 @@ def train_classifier(start_epoch,
             # scaler.update()
 
         if epoch % config.logging.eval_freq == 0:  # and epoch>0
-            prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
+            if use_clip:
+                prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
+            else:
+                prec1 = validate(epoch,val_loader, classes, device, model_image,fusion_model, config,num_text_aug,use_clip,text_str)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
@@ -248,9 +264,14 @@ def train_classifier(start_epoch,
         print('Saving:')
         filename = "{}/last_model.pt".format(working_dir)
 
-        epoch_saving(epoch, perceptor, fusion_model, optimizer, filename)
-        if is_best:
-            best_saving(working_dir, epoch, perceptor, fusion_model, optimizer)
+        if use_clip:
+            epoch_saving(epoch, perceptor, fusion_model, optimizer, filename, use_clip)
+            if is_best:
+                best_saving(working_dir, epoch, perceptor, fusion_model, optimizer, use_clip)
+        else:
+            epoch_saving(epoch, model_image, fusion_model, optimizer, filename, use_clip)
+            if is_best:
+                best_saving(working_dir, epoch, model_image, fusion_model, optimizer, use_clip)
 def main():
     global args, best_prec1
     global global_step

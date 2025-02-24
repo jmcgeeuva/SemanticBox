@@ -906,7 +906,7 @@ class Florence2LanguageModel(Florence2LanguagePreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if encoder_outputs is None:
-            print(f'DEBUG ENCODER: {next(self.encoder.parameters()).device} {input_ids.shape if input_ids is not None else "None"} {attention_mask.shape} {head_mask.shape if head_mask is not None else "None"} {inputs_embeds.shape}')
+            # print(f'DEBUG ENCODER: {next(self.encoder.parameters()).device} {input_ids.shape if input_ids is not None else "None"} {attention_mask.shape} {head_mask.shape if head_mask is not None else "None"} {inputs_embeds.shape}')
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -1290,7 +1290,7 @@ class Florence2LanguageForConditionalGeneration(Florence2LanguagePreTrainedModel
             if model_input_name == "input_ids" and len(model_kwargs["attention_mask"].shape) > 2:
                 raise ValueError("`attention_mask` passed to `generate` must be 2D.")
 
-        print(f'DEVUCE {self.get_encoder().device}')
+        # print(f'DEVUCE {self.get_encoder().device}')
         if self.config.is_encoder_decoder and "encoder_outputs" not in model_kwargs:
             # if model is encoder decoder encoder_outputs are created and added to `model_kwargs`
             model_kwargs = self._prepare_encoder_decoder_kwargs_for_generation(

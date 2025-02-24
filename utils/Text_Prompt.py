@@ -33,7 +33,7 @@ def text_prompt(data, use_clip=True, file_name='text_aug1.txt'):
 
     num_text_aug = len(text_aug)
 
-    if use_clip or not use_clip:
+    if use_clip:
         text_dict = {}
         text_str = {}
         if 'longest' in file_name:
