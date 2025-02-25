@@ -322,10 +322,10 @@ def main():
                                             joint = config.network.joint) #Must set jit=False for training  ViT-B/32
     else:
         perceptor, vlm_state_dict, processor = flor2.load("BASE_FT", device)
-        processor.image_processor.crop_size['height'] = 112
-        processor.image_processor.crop_size['width'] = 112
-        processor.image_processor.size['height'] = 112
-        processor.image_processor.size['width'] = 112
+        processor.image_processor.crop_size['height'] = config.data.input_size
+        processor.image_processor.crop_size['width'] = config.data.input_size
+        processor.image_processor.size['height'] = config.data.input_size
+        processor.image_processor.size['width'] = config.data.input_size
 
         vlm_state_dict["text_projection"] = torch.empty((1, perceptor.config.text_config.d_model))
         vlm_state_dict["positional_embedding"] = torch.empty((perceptor.config.text_config.vocab_size,))
@@ -487,7 +487,7 @@ def main():
         else:
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
-    classes, num_text_aug, text_dict, text_str = text_prompt(train_data, file_name=config.prompt)
+    classes, num_text_aug, text_dict, text_str = text_prompt(train_data, use_clip=use_clip, file_name=config.prompt)
 
     replace_grad = ReplaceGrad.apply
     # 1. Compile a proper list of the classes with label numbers
