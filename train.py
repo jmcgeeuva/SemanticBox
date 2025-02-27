@@ -84,6 +84,33 @@ def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas
     return loss_all, image_embedding, text_embedding
 
 
+def calculate_logits(text_strs, processor, model_image, texts, videos):
+    videos = videos.squeeze(dim=1)
+    b,t,c,h,w = videos.size()
+    images = videos.view(-1,c,h,w )
+    text = []
+    for i, v in enumerate(text_strs):
+        caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #
+        text.extend(caption)
+    
+    images = [transforms.functional.to_pil_image(image) for image in images]
+    
+    inputs = processor(text=text, images=images, padding=True, do_resize=True, return_tensors="pt")
+    pixel_values = inputs['pixel_values']
+    input_ids = inputs['input_ids']
+    
+    image_features, text_embedding, flo_loss = model_image(input_ids, pixel_values, texts, text_strs)
+    
+    image_features = image_features.view(b, -1, image_features.shape[-1])
+    image_features = image_features.mean(dim=1)
+    # TODO add embedding to expand from 768 to context length
+    image_features = model_image.language_model.lm_head(image_features)
+    
+    logit_scale = 100.0 #perceptor.logit_scale.exp()
+    logits_per_image, logits_per_text = create_logits(image_features, text_embedding, logit_scale)
+    return image_features, logits_per_image, logits_per_text, flo_loss
+
+
 def train_classifier(start_epoch, 
                      loss_img,
                      loss_txt,
@@ -161,14 +188,14 @@ def train_classifier(start_epoch,
             ############## Calculate explainability loss between attn and mask ###########
             # run through the prompt model and get the new results from the prompts
             if config.data.lambda_bb > 0:
-                loss_all, image_embedding, text_embedding = bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model)
+                loss_all, image_features, text_embedding = bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model)
             elif use_clip:
                 video_tensor = videos.view(-1,c,h,w )
-                image_embedding = model_image(video_tensor)
-                image_embedding = image_embedding.view(b,t,-1)
-                image_embedding = fusion_model(image_embedding)
+                image_features = model_image(video_tensor)
+                image_features = image_features.view(b,t,-1)
+                image_features = fusion_model(image_features)
                 
-                img_emb_crp = torch.zeros_like(image_embedding)
+                img_emb_crp = torch.zeros_like(image_features)
                 if config.data.lambda_cropped > 0:
                     video_tensor = cropped_videos.view(-1,c,h,w )
                     img_emb_crp = model_image(video_tensor)
@@ -182,35 +209,22 @@ def train_classifier(start_epoch,
                     text_embedding.detach_()
 
                 logit_scale = perceptor.logit_scale.exp()
-                logits_per_image, logits_per_text = create_cropped_logits(image_embedding, text_embedding, img_emb_crp, config.data.lambda_orig, config.data.lambda_cropped,logit_scale)
+                logits_per_image, logits_per_text = create_cropped_logits(image_features, text_embedding, img_emb_crp, config.data.lambda_orig, config.data.lambda_cropped,logit_scale)
 
                 generated_labels = gen_label(list_id)
                 ground_truth = torch.tensor(generated_labels)
-                ground_truth = ground_truth.to(dtype=image_embedding.dtype,device=device)
+                ground_truth = ground_truth.to(dtype=image_features.dtype,device=device)
                 loss_imgs = loss_img(logits_per_image,ground_truth)
                 loss_texts = loss_txt(logits_per_text,ground_truth)
                 kl_loss = (loss_imgs + loss_texts)/2
                 total_loss = kl_loss
                 running_kl += kl_loss.item()
             else:
-
-                # print(videos.get_device())
-                # print(texts.get_device())
-                # print(next(model_image.parameters()).device)
-                videos = videos.squeeze(dim=1)
-                image_features, text_embedding, flo_loss = model_image(videos, texts, text_strs)
-                
-                image_embedding = image_features.view(b, -1, image_features.shape[-1])
-                image_embedding = image_embedding.mean(dim=1)
-                # TODO add embedding to expand from 768 to context length
-                image_embedding = model_image.language_model.lm_head(image_embedding)
-
-                logit_scale = 100.0 #perceptor.logit_scale.exp()
-                logits_per_image, logits_per_text = create_logits(image_embedding, text_embedding, logit_scale)
+                image_features, logits_per_image, logits_per_text, flo_loss = calculate_logits(text_strs, processor, model_image, texts, videos)
 
                 generated_labels = gen_label(list_id)
                 ground_truth = torch.tensor(generated_labels)
-                ground_truth = ground_truth.to(dtype=image_embedding.dtype,device=device)
+                ground_truth = ground_truth.to(dtype=image_features.dtype,device=device)
                 loss_imgs = loss_img(logits_per_image,ground_truth)
                 loss_texts = loss_txt(logits_per_text,ground_truth)
                 kl_loss = (loss_imgs + loss_texts)/2
@@ -256,7 +270,7 @@ def train_classifier(start_epoch,
             if use_clip:
                 prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
             else:
-                prec1 = validate(epoch,val_loader, classes, device, model_image,fusion_model, config,num_text_aug,use_clip,text_str)
+                prec1 = validate(epoch,val_loader, classes, device, model_image,fusion_model, config,num_text_aug,use_clip,text_str, processor)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)

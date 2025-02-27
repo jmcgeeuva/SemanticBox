@@ -31,6 +31,7 @@ import numpy as np
 from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
 # from gradcam_helper import *
 from utils.tools import *
+from torchvision import transforms
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,
@@ -114,7 +115,7 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     return similarity
 
 
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, use_clip, text_str, print_figures=False):
+def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, use_clip, text_str, processor, print_figures=False):
     model.eval()
     if use_clip:
         fusion_model.eval()
@@ -176,13 +177,26 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             else:
                 videos = videos.squeeze(dim=1)
                 b, t, c, h, w = videos.size()
+                
                 expand_vid = torch.empty((len(text_strs), t, c, h, w), dtype=videos.dtype)
                 num_classes = len(text_strs)//b
                 for i, video in enumerate(videos):
                     for j in range(num_classes):
                         expand_vid[j+i*num_classes] = video
+    
+                text = []
+                for i, v in enumerate(text_strs):
+                    caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #
+                    text.extend(caption)
+                
+                images = expand_vid.view(-1,c,h,w )
+                images = [transforms.functional.to_pil_image(image) for image in images]
+                
+                inputs = processor(text=text, images=images, padding=True, do_resize=True, return_tensors="pt")
+                pixel_values = inputs['pixel_values']
+                input_ids = inputs['input_ids']
 
-                image_features, text_embedding, flo_loss = model(expand_vid, texts, text_strs, debug=False)
+                image_features, text_embedding, flo_loss = model(input_ids, pixel_values, texts, text_strs)
                 
                 image_embedding = image_features.view(len(text_strs), -1, image_features.shape[-1])
                 image_embedding = image_embedding.mean(dim=1)
