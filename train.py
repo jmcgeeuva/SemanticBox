@@ -25,7 +25,7 @@ from utils.saving import  *
 import sys
 sys.path.insert(0, "../explain/ml-no-token-left-behind/external/tamingtransformers/")
 sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
-from prompt import PromptLoss, TextCLIP, ImageCLIP, ImageFlorence
+from prompt import PromptLoss, TextCLIP, ImageCLIP, ImageFlorence, calculate_logits
 from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
@@ -84,31 +84,6 @@ def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas
     return loss_all, image_embedding, text_embedding
 
 
-def calculate_logits(text_strs, processor, model_image, texts, videos):
-    videos = videos.squeeze(dim=1)
-    b,t,c,h,w = videos.size()
-    images = videos.view(-1,c,h,w )
-    text = []
-    for i, v in enumerate(text_strs):
-        caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #
-        text.extend(caption)
-    
-    images = [transforms.functional.to_pil_image(image) for image in images]
-    
-    inputs = processor(text=text, images=images, padding=True, do_resize=True, return_tensors="pt")
-    pixel_values = inputs['pixel_values']
-    input_ids = inputs['input_ids']
-    
-    image_features, text_embedding, flo_loss = model_image(input_ids, pixel_values, texts, text_strs)
-    
-    image_features = image_features.view(b, -1, image_features.shape[-1])
-    image_features = image_features.mean(dim=1)
-    # TODO add embedding to expand from 768 to context length
-    image_features = model_image.language_model.lm_head(image_features)
-    
-    logit_scale = 100.0 #perceptor.logit_scale.exp()
-    logits_per_image, logits_per_text = create_logits(image_features, text_embedding, logit_scale)
-    return image_features, logits_per_image, logits_per_text, flo_loss
 
 
 def train_classifier(start_epoch, 
@@ -270,7 +245,7 @@ def train_classifier(start_epoch,
             if use_clip:
                 prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
             else:
-                prec1 = validate(epoch,val_loader, classes, device, model_image,fusion_model, config,num_text_aug,use_clip,text_str, processor)
+                prec1 = validate(epoch,val_loader, classes, device, model_image,fusion_model, config,num_text_aug,use_clip,text_str, processor, model_image)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)

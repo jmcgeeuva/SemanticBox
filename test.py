@@ -32,6 +32,7 @@ from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
 # from gradcam_helper import *
 from utils.tools import *
 from torchvision import transforms
+from prompt import calculate_logits
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,
@@ -115,7 +116,7 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     return similarity
 
 
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, use_clip, text_str, processor, print_figures=False):
+def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, use_clip, text_str, processor, model_image, print_figures=False):
     model.eval()
     if use_clip:
         fusion_model.eval()
@@ -184,27 +185,32 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
                     for j in range(num_classes):
                         expand_vid[j+i*num_classes] = video
     
-                text = []
-                for i, v in enumerate(text_strs):
-                    caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #
-                    text.extend(caption)
-                
-                images = expand_vid.view(-1,c,h,w )
-                images = [transforms.functional.to_pil_image(image) for image in images]
-                
-                inputs = processor(text=text, images=images, padding=True, do_resize=True, return_tensors="pt")
-                pixel_values = inputs['pixel_values']
-                input_ids = inputs['input_ids']
 
-                image_features, text_embedding, flo_loss = model(input_ids, pixel_values, texts, text_strs)
+                image_features, logits_per_image, _, _ = calculate_logits(text_strs, processor, model_image, texts, expand_vid)
+                # text = []
+                # for i, v in enumerate(text_strs):
+                #     caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #
+                #     text.extend(caption)
                 
-                image_embedding = image_features.view(len(text_strs), -1, image_features.shape[-1])
-                image_embedding = image_embedding.mean(dim=1)
-                # TODO add embedding to expand from 768 to context length
-                image_embedding = model.language_model.lm_head(image_embedding)
+                # images = expand_vid.view(-1,c,h,w )
+                # images = [transforms.functional.to_pil_image(image) for image in images]
+                
+                # inputs = processor(text=text, images=images, padding=True, do_resize=True, return_tensors="pt")
+                # pixel_values = inputs['pixel_values']
+                # input_ids = inputs['input_ids']
 
-                logit_scale = 100.0 #perceptor.logit_scale.exp()
-                logits_per_image, _ = create_logits(image_embedding, text_embedding, logit_scale)
+                # image_features, attention_mask, inputs_embeds, texts = model_image(input_ids, pixel_values, texts, text_strs)
+    
+                # text_embedding, logits = model_image.get_text_embedding(attention_mask, inputs_embeds, texts)
+                # flo_loss = logits.loss
+                
+                # image_embedding = image_features.view(len(text_strs), -1, image_features.shape[-1])
+                # image_embedding = image_embedding.mean(dim=1)
+                # # TODO add embedding to expand from 768 to context length
+                # image_embedding = model.language_model.lm_head(image_embedding)
+
+                # logit_scale = 100.0 #perceptor.logit_scale.exp()
+                # logits_per_image, _ = create_logits(image_embedding, text_embedding, logit_scale)
 
             similarity = calculate_similarity(logits_per_image, b, num_text_aug)
             values_1, indices_1 = similarity.topk(1, dim=-1)
