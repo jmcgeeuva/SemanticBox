@@ -141,33 +141,6 @@ class ImageFlorence(nn.Module):
     def __init__(self, model, use_clip, transformer_width=51289, embed_dim=51289, processor=None, config=None, vlm_state_dict=None) :
         super(ImageFlorence, self).__init__()
         self.model = model
-        self.language_model = model.language_model
-        self.processor = processor
-        self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
-        self.fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
-        self.model_text = TextCLIP(model, use_clip=use_clip)
-        self.transformer_width = transformer_width
-        self.initialize_parameters()
-        self.num_segments = 8
-
-    def initialize_parameters(self):
-        if self.text_projection is not None:
-            nn.init.normal_(self.text_projection, std=self.transformer_width ** -0.5)
-
-    def get_text_embedding(self, attention_mask, inputs_embeds, texts):
-        # FIXME add booleans to the config that turn on and off the freezing of certain sections
-        # Make a DETAILED diagram of how Florence-2 is setup (Attention and all with class names)
-        with torch.no_grad():
-            logits = self.language_model(
-                attention_mask=attention_mask,
-                inputs_embeds=inputs_embeds,
-                labels=texts
-            )
-        
-        text_embedding = logits.logits.float()
-        text_embedding = text_embedding[torch.arange(text_embedding.shape[0]), texts.argmax(dim=-1)]
-        text_embedding = text_embedding @ self.text_projection.to(text_embedding.get_device())
-        return text_embedding, logits
 
     def forward(self, input_ids, pixel_values, texts, classes, debug=False):
         input_ids = input_ids.to(device=self.model.device)
@@ -183,15 +156,6 @@ class ImageFlorence(nn.Module):
             inputs_embeds, attention_mask = self.model._merge_input_ids_with_image_features(image_features, inputs_embeds)
         
         attention_mask = attention_mask[::8]
-
-        i_n, i_c, i_e = inputs_embeds.shape
-        b = i_n//self.num_segments
-        inputs_embeds = inputs_embeds.view(b,self.num_segments,i_c,-1)
-        inputs_embeds = inputs_embeds.permute(0, 2, 1, 3)
-        inputs_embeds = inputs_embeds.reshape(-1,self.num_segments,inputs_embeds.shape[-1])
-        # FIXME play with how this is run and how we get temporal understanding (maybe move to before image embedding)
-        inputs_embeds = self.fusion_model(inputs_embeds)
-        inputs_embeds = inputs_embeds.view(b,i_c,-1)
 
         return image_features, attention_mask, inputs_embeds, texts
 
@@ -424,7 +388,7 @@ class PromptLoss2(nn.Module):
         return final_loss, text_embedding, image_embedding
 
 
-def calculate_logits(text_strs, processor, model_image, texts, videos):
+def calculate_logits(text_strs, processor, model_image, model_text, fusion_model, texts, videos):
     videos = videos.squeeze(dim=1)
     b,t,c,h,w = videos.size()
     images = videos.view(-1,c,h,w )
@@ -440,14 +404,24 @@ def calculate_logits(text_strs, processor, model_image, texts, videos):
     input_ids = inputs['input_ids']
     
     image_features, attention_mask, inputs_embeds, texts = model_image(input_ids, pixel_values, texts, text_strs)
+
+    num_segments = t
+    i_n, i_c, i_e = inputs_embeds.shape
+    b = i_n//num_segments
+    inputs_embeds = inputs_embeds.view(b,num_segments,i_c,-1)
+    inputs_embeds = inputs_embeds.permute(0, 2, 1, 3)
+    inputs_embeds = inputs_embeds.reshape(-1,num_segments,inputs_embeds.shape[-1])
+    # FIXME play with how this is run and how we get temporal understanding (maybe move to before image embedding)
+    inputs_embeds = fusion_model(inputs_embeds)
+    inputs_embeds = inputs_embeds.view(b,i_c,-1)
     
-    text_embedding, logits = model_image.get_text_embedding(attention_mask, inputs_embeds, texts)
+    text_embedding, logits = model_text(attention_mask, inputs_embeds, texts)
     flo_loss = logits.loss
 
     image_features = image_features.view(b, -1, image_features.shape[-1])
     image_features = image_features.mean(dim=1)
     # TODO add embedding to expand from 768 to context length
-    image_features = model_image.language_model.lm_head(image_features)
+    image_features = model_text.language_model.lm_head(image_features)
     
     logit_scale = 100.0 #perceptor.logit_scale.exp()
     logits_per_image, logits_per_text = create_logits(image_features, text_embedding, logit_scale)

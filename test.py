@@ -116,10 +116,11 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     return similarity
 
 
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, use_clip, text_str, processor, model_image, print_figures=False):
+def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, use_clip, text_str, processor, model_image, model_text, print_figures=False):
     model.eval()
-    if use_clip:
-        fusion_model.eval()
+    model_image.eval()
+    model_text.eval()
+    fusion_model.eval()
     num = 0
     corr_1 = 0
     corr_5 = 0
@@ -186,7 +187,7 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
                         expand_vid[j+i*num_classes] = video
     
 
-                image_features, logits_per_image, _, _ = calculate_logits(text_strs, processor, model_image, texts, expand_vid)
+                image_features, logits_per_image, _, _ = calculate_logits(text_strs, processor, model_image, model_text, fusion_model, texts, expand_vid)
                 # text = []
                 # for i, v in enumerate(text_strs):
                 #     caption = [f'<CAPTION_TO_PHRASE_GROUNDING>{v}' for _ in range(t)] #

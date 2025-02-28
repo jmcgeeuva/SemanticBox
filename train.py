@@ -25,7 +25,7 @@ from utils.saving import  *
 import sys
 sys.path.insert(0, "../explain/ml-no-token-left-behind/external/tamingtransformers/")
 sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
-from prompt import PromptLoss, TextCLIP, ImageCLIP, ImageFlorence, calculate_logits
+from prompt import PromptLoss, TextCLIP, ImageCLIP, ImageFlorence, TextFlorence, calculate_logits
 from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
@@ -116,8 +116,8 @@ def train_classifier(start_epoch,
     # scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, config.solver.epochs):
         model_image.train()
-        if fusion_model:
-            fusion_model.train()
+        model_text.train()
+        fusion_model.train()
 
         running_loss_all = 0
         running_kl = 0
@@ -195,7 +195,7 @@ def train_classifier(start_epoch,
                 total_loss = kl_loss
                 running_kl += kl_loss.item()
             else:
-                image_features, logits_per_image, logits_per_text, flo_loss = calculate_logits(text_strs, processor, model_image, texts, videos)
+                image_features, logits_per_image, logits_per_text, flo_loss = calculate_logits(text_strs, processor, model_image, model_text, fusion_model, texts, videos)
 
                 generated_labels = gen_label(list_id)
                 ground_truth = torch.tensor(generated_labels)
@@ -245,7 +245,7 @@ def train_classifier(start_epoch,
             if use_clip:
                 prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
             else:
-                prec1 = validate(epoch,val_loader, classes, device, model_image,fusion_model, config,num_text_aug,use_clip,text_str, processor, model_image)
+                prec1 = validate(epoch,val_loader, classes, device, model_image,fusion_model, config,num_text_aug,use_clip,text_str, processor, model_image, model_text)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
@@ -339,8 +339,10 @@ def main():
         processor=None
     else:
         model_image = ImageFlorence(perceptor, use_clip=use_clip, processor=processor, config=config, vlm_state_dict=vlm_state_dict)
-        fusion_model = None
-        model_text= None
+        # fusion_model = None
+        fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
+        model_text = TextFlorence(perceptor)
+        # model_text= None
     # model_text = torch.nn.DataParallel(model_text).cuda()
     # model_image = torch.nn.DataParallel(model_image).cuda()
     # fusion_model = torch.nn.DataParallel(fusion_model).cuda()
