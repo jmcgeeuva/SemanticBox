@@ -25,12 +25,13 @@ from utils.saving import  *
 import sys
 sys.path.insert(0, "../explain/ml-no-token-left-behind/external/tamingtransformers/")
 sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
-from prompt import PromptLoss, TextCLIP, ImageCLIP, ImageFlorence, TextFlorence, calculate_logits
+from prompt import PromptLoss, TextCLIP, ImageCLIP, ImageFlorence, TextFlorence
 from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
 import modeling_florence2 as flor2
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
+from calculate_logits import *
 
 import torch
 
@@ -343,9 +344,9 @@ def main():
         fusion_model = visual_prompt(config.network.sim_header,vlm_state_dict,config.data.num_segments)
         model_text = TextFlorence(perceptor)
         # model_text= None
-    # model_text = torch.nn.DataParallel(model_text).cuda()
-    # model_image = torch.nn.DataParallel(model_image).cuda()
-    # fusion_model = torch.nn.DataParallel(fusion_model).cuda()
+        # model_text = torch.nn.DataParallel(model_text).cuda()
+        # fusion_model = torch.nn.DataParallel(fusion_model).cuda()
+        # model_image = torch.nn.DataParallel(model_image).cuda()
 
     wandb.watch(perceptor)
 

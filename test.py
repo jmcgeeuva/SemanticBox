@@ -32,7 +32,7 @@ from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
 # from gradcam_helper import *
 from utils.tools import *
 from torchvision import transforms
-from prompt import calculate_logits
+from calculate_logits import *
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,

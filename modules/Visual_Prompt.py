@@ -7,6 +7,7 @@ from torch import nn
 from collections import OrderedDict
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
 import math
+import torch.nn.functional as F
 
 class LayerNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-12):
@@ -123,9 +124,6 @@ class visual_prompt(nn.Module):
             transformer_heads = transformer_width // 64
             # transformer_layers = len(set(k.split(".")[2] for k in clip_state_dict if k.startswith(f"transformer.resblocks")))
 
-            # FIXME: Magic numbers
-            # embed_dim2 = (13+(math.ceil(math.sqrt((112*112)//1024))**2+1))*embed_dim
-            # print(f'DEBUG {context_length} {embed_dim2} {transformer_heads}')
             self.frame_position_embeddings = nn.Embedding(context_length, embed_dim)
         if self.sim_header == "Transf" :
             self.transformer = TemporalTransformer(width=embed_dim, layers=6, heads=transformer_heads)
@@ -166,6 +164,7 @@ class visual_prompt(nn.Module):
 
     def forward(self, x):
         b, t, c = x.size()
+        # b, t, c, d = x.size()
         x = x.contiguous()
         if self.sim_header == "meanP":
             pass
@@ -179,18 +178,24 @@ class visual_prompt(nn.Module):
         elif self.sim_header == "Transf":
             x_original = x
             seq_length = t
+            # These are position ids for the frames. So since we rearrange so that
+            # the i_c is mixed with time then we need to line up the proper position ids
+            # with specific channels
             position_ids = torch.arange(seq_length, dtype=torch.long, device=x.device)
+            # position_ids = position_ids.repeat_interleave(80)
             position_ids = position_ids.unsqueeze(0).expand(x.size(0), -1)
             # print(position_ids.get_device())
             self.frame_position_embeddings = self.frame_position_embeddings.to(device=position_ids.get_device())
             # print(next(self.frame_position_embeddings.parameters()).device)
             frame_position_embeddings = self.frame_position_embeddings(position_ids)
+            # x = x.view(b, -1, d)
             x = x + frame_position_embeddings
 
             x = x.permute(1, 0, 2)  # NLD -> LND
             self.transformer = self.transformer.to(device=x.get_device())
             x = self.transformer(x)
             x = x.permute(1, 0, 2)  # LND -> NLD
+            # x = x.view(b, t, c, d)
             x = x.type(x_original.dtype) + x_original
 
         elif self.sim_header == "LSTM":
