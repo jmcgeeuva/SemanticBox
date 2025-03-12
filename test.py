@@ -4,8 +4,8 @@
 
 import os
 import sys
-sys.path.insert(0, "./../explain/ml-no-token-left-behind/external/tamingtransformers/")
-sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
+sys.path.insert(0, "./../explainable_bounding_box/ml-no-token-left-behind/external/tamingtransformers/")
+sys.path.append("./../explainable_bounding_box/ml-no-token-left-behind/external/TransformerMMExplainability/")
 import CLIP.clip as clip
 import torch.nn as nn
 from datasets import Action_DATASETS, Action_DATASETS_orig

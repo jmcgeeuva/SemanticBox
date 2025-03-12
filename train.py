@@ -23,8 +23,8 @@ from utils.tools import *
 from utils.Text_Prompt import *
 from utils.saving import  *
 import sys
-sys.path.insert(0, "../explain/ml-no-token-left-behind/external/tamingtransformers/")
-sys.path.append("./../explain/ml-no-token-left-behind/external/TransformerMMExplainability/")
+sys.path.insert(0, "../explainable_bounding_box/ml-no-token-left-behind/external/tamingtransformers/")
+sys.path.append("./../explainable_bounding_box/ml-no-token-left-behind/external/TransformerMMExplainability/")
 from prompt import PromptLoss, TextCLIP, ImageCLIP
 from prompt import PromptLoss2 as pl2
 from helpers import *
@@ -209,7 +209,7 @@ def train_classifier(start_epoch,
                 list_id = list_id.to(device)
                 ce_loss = cross_entropy(similarity+similarity_orig, list_id)
 
-
+            # parameter = nn.Parameter()
             ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
             loss_imgs = loss_img(logits_per_image,ground_truth)
             loss_texts = loss_txt(logits_per_text,ground_truth)

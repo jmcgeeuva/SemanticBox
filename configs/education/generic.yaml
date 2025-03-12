@@ -12,11 +12,11 @@ data:
     workers: 16
     num_classes: 6
     image_tmpl: '{:04d}.jpg'
-    train_list: '../../splits/split_reduced/trainnewsplit01.txt'
-    val_list: '../../splits/split_reduced/testnewsplit01.txt' #
+    train_list: './splits/split_reduced/trainnewsplit01.txt'
+    val_list: './splits/split_reduced/testnewsplit01.txt' #
     # train_list: '../../splits/split/trainsplit00.txt'
     # val_list: '../../splits/split/testsplit00.txt' #
-    label_list: '../../splits/split_reduced/education_6_labels.csv'
+    label_list: './splits/split_reduced/education_6_labels.csv'
     index_bias: 1
     input_size: 224
     randaug:
@@ -24,23 +24,23 @@ data:
         M: 9  #9
     random_shift: True
     im_emb_type: 'just_image' # just_image, just_mask, average
-    # lambda_bb: 0 # lambda_bb == 0 and lambda_ce == 0 is just the original ActionCLIP
-    # lambda_ce: 0
-    # lambda_orig: 1
-    # lambda_cropped: .5
-    # use_orig: True
-    orig:
-        use: True
-        lambda_val: .75
-        test_lambda: 1
-    cropped:
-        use: True
-        lambda_val: 0
-        test: False
-        test_lambda: 1
-    ce:
-        use: False
-        lambda_val: 0
+    lambda_bb: 0 # lambda_bb == 0 and lambda_ce == 0 is just the original ActionCLIP
+    lambda_ce: 0
+    lambda_orig: 1
+    lambda_cropped: .5
+    use_orig: True
+    # orig:
+    #     use: True
+    #     lambda_val: .75
+    #     test_lambda: 1
+    # cropped:
+    #     use: True
+    #     lambda_val: 0
+    #     test: False
+    #     test_lambda: 1
+    # ce:
+    #     use: False
+    #     lambda_val: 0
 network:
     arch: ViT-B/32  #ViT-B/32 ViT-B/16
     init: True
