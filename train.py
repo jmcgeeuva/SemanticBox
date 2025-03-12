@@ -315,6 +315,16 @@ def main():
                                            emb_dropout=config.network.emb_dropout,
                                            pretrain=config.network.init, 
                                            joint = config.network.joint) #Must set jit=False for training  ViT-B/32
+    flo_model, vlm_state_dict, processor = flor2.load("BASE_FT", device)
+    flo_model.image_processor.crop_size['height'] = config.data.input_size
+    flo_model.image_processor.crop_size['width'] = config.data.input_size
+    flo_model.image_processor.size['height'] = config.data.input_size
+    flo_model.image_processor.size['width'] = config.data.input_size
+
+    # vlm_state_dict["text_projection"] = torch.empty((1, flo_model.config.text_config.d_model))
+    # vlm_state_dict["positional_embedding"] = torch.empty((flo_model.config.text_config.vocab_size,))
+    # vlm_state_dict["ln_final.weight"] = torch.empty((flo_model.config.text_config.encoder_attention_heads*64,))
+    
     transform_train = get_augmentation(True,config)
     transform_val = get_augmentation(False,config)
 
