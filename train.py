@@ -33,6 +33,12 @@ import random
 
 import torch
 
+from florence.configuration_florence2 import *
+from florence.davit import *
+from florence.florence_attn import *
+from florence.modeling_florence2 import *
+from florence.processor import *
+
 def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
     # keys = sorted(list(label_names.keys()))
     res = {}
