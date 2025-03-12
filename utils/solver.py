@@ -25,7 +25,7 @@ def _optimizer(config, model, fusion_model):
         text_params = filter(lambda p: id(p) not in vision_params,
                              model.parameters())
 
-        optimizer = optim.AdamW([#{'params': text_params},
+        optimizer = optim.AdamW([{'params': text_params},
                                  {'params': model.visual.parameters(), 'lr': config.solver.lr * config.solver.ratio},
                                  {'params': fusion_model.parameters(), 'lr': config.solver.lr * config.solver.f_ratio}],
                                 betas=(0.9, 0.98), lr=config.solver.lr, eps=1e-8,
