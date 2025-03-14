@@ -29,6 +29,7 @@ from sklearn.utils.multiclass import unique_labels
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
+from torchvision import transforms
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,
@@ -107,8 +108,55 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     similarity = similarity.mean(dim=1, keepdim=False)
     return similarity
 
+def run_example(cropped_images, processor, model, bbs=None, label=None, text_input=None, debug=False):
+    if bbs != None:
+        norm_bbs = []
+        for bb in bbs:
+            bb = normalize(bb, cropped_images[0].size[0], cropped_images[0].size[1])
+            norm_bbs.append(bb)
+        prompt_r2d = '<REGION_TO_DESCRIPTION>'
+        for dim in bb:
+            prompt_r2d += f'<loc_{dim}>'
 
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug):
+    prompt_type = '<CAPTION>' #'<DETAILED_CAPTION>'
+    prompt = [prompt_type for _ in cropped_images]
+    # Just choose one frame to create a caption for
+    cropped_images = [transforms.ToPILImage()(images[0]) for images in cropped_images]
+    inputs = processor(text=prompt, images=cropped_images, return_tensors="pt", padding=False)
+
+    generated_ids = model.generate(
+        input_ids=inputs["input_ids"],
+        pixel_values=inputs["pixel_values"],
+        max_new_tokens=512,
+        early_stopping=False,
+        do_sample=False,
+        num_beams=3,
+    )
+
+    generated_text =processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+    # print([len(text.split()) for text in generated_text])
+    final_text = torch.stack([clip.tokenize(text.replace('<s>', '').replace('</s>', '')) for text in generated_text])
+    # final_text += ' This is a ' + re.sub(r"<loc_\d+>", "", generated_text[1][0]).replace('<s>', '').replace('</s>', '')
+    # print(f"generated_text ---> {generated_text}")
+
+    # if debug:
+    #     with open('test.txt', 'w') as f:
+    #         fig = plt.figure()
+    #         plt.imshow(image)
+    #         plt.title(label)
+    #         plt.axis('off')
+    #         fig.text(0.5, 0.05, final_text, wrap=True, ha='center')
+    #         plt.savefig(f'test.png')
+    # parsed_answer = processor.post_process_generation(
+    #     generated_text,
+    #     task=prompts,
+    #     image_size=(videos.shape[-1], videos.shape[-1])
+    # )
+
+    return final_text.squeeze(dim=1)
+
+def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug): #, processor, flo_model):
     model.eval()
     fusion_model.eval()
     num = 0
@@ -121,18 +169,20 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
         text_inputs = classes.to(device)
         text_features = model.encode_text(text_inputs)
         for iii, data in enumerate(tqdm(val_loader)):
-            if len(data) > 3:
-                image, aug_masks, lambdas, class_id = data
-                aug_masks = aug_masks.to(device)
-                lambdas = lambdas.to(device)
-            elif len(data) > 2:
-                image, orig_videos, class_id = data
+            
+            if len(data) > 2:
+                image, orig_videos, generated_images, class_id = data
                 orig_videos = orig_videos.to(device)
                 class_id = class_id.to(device)
                 image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
             else:
                 image, class_id = data
                 image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
+
+            if False:
+                final_text = run_example(generated_images, processor, flo_model)
+                final_text = final_text.to(device)
+                text_features = model.encode_text(final_text)
 
             # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
             b, t, c, h, w = image.size()

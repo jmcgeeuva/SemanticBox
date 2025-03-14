@@ -76,11 +76,12 @@ def get_augmentation(training, config):
         unique = torchvision.transforms.Compose([
                                                  GroupMultiScaleCrop(config.data.input_size, [1, .875, .75, .66]),
                                                  GroupRandomHorizontalFlip(is_sth='some' in config.data.dataset),
-                                                 GroupRandomColorJitter(p=0.8, brightness=0.4, contrast=0.4,
-                                                                        saturation=0.2, hue=0.1),
+                                                #  GroupRandomColorJitter(p=0.8, brightness=0.4, contrast=0.4,
+                                                #                         saturation=0.2, hue=0.1),
                                                  GroupRandomGrayscale(p=0.2),
-                                                 GroupGaussianBlur(p=0),
-                                                 GroupSolarization(p=0)]
+                                                #  GroupGaussianBlur(p=0),
+                                                #  GroupSolarization(p=0)
+                                                 ]
                                                 )
     else:
         unique = torchvision.transforms.Compose([

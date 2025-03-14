@@ -23,12 +23,13 @@ data:
         N: 2 #2
         M: 9  #9
     random_shift: True
-    im_emb_type: 'just_image' # just_image, just_mask, average
+    # im_emb_type: 'just_image' # just_image, just_mask, average
     lambda_bb: 0 # lambda_bb == 0 and lambda_ce == 0 is just the original ActionCLIP
     lambda_ce: 0
     lambda_orig: 1
     lambda_cropped: .5
     use_orig: True
+    label_box: True
     # orig:
     #     use: True
     #     lambda_val: .75

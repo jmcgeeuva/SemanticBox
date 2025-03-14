@@ -16,7 +16,7 @@ from dotmap import DotMap
 import pprint
 from modules.Visual_Prompt import visual_prompt
 from utils.KLLoss import KLLoss
-from test import validate, calculate_similarity
+from test import validate, calculate_similarity, run_example
 from utils.Augmentation import *
 from utils.solver import _optimizer, _lr_scheduler
 from utils.tools import *
@@ -32,12 +32,12 @@ import random
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 import torch
+import itertools
 
-from florence.configuration_florence2 import *
-from florence.davit import *
-from florence.florence_attn import *
-from florence.modeling_florence2 import *
-from florence.processor import *
+# from florence.configuration_florence2 import *
+# from florence.florence_attn import *
+# import florence.modeling_florence2 as flor2
+# from florence.processor import *
 
 def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
     # keys = sorted(list(label_names.keys()))
@@ -106,7 +106,9 @@ def train_classifier(start_epoch,
                      working_dir,
                      device,
                      lambda_bb,
-                     lambda_ce):
+                     lambda_ce): #,
+                     #processor,
+                     #flo_model):
     best_prec1 = -1
     cross_entropy = nn.CrossEntropyLoss()
     clamp_with_grad = ClampWithGrad.apply
@@ -158,14 +160,15 @@ def train_classifier(start_epoch,
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
-            if len(data) > 3:
-                videos, aug_masks, lambdas, list_id = data
-                aug_masks = aug_masks.to(device)
-                lambdas = lambdas.to(device)
-            elif len(data) > 2:
-                videos, orig_videos, list_id = data
+            # if len(data) > 3:
+            #     videos, aug_masks, lambdas, list_id = data
+            #     aug_masks = aug_masks.to(device)
+            #     lambdas = lambdas.to(device)
+            if len(data) > 2:
+                videos, orig_videos, generated_images, list_id = data
                 orig_videos = orig_videos.to(device)
                 list_id = list_id.to(device)
+                # generated_images = generated_images.to(device)
                 videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
             else:
                 videos, list_id = data
@@ -173,11 +176,18 @@ def train_classifier(start_epoch,
             
             b,t,c,h,w = videos.size()
             
-            text_id = numpy.random.randint(num_text_aug,size=len(list_id))
-            texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
 
+
+            text_id = numpy.random.randint(num_text_aug,size=len(list_id))
+
+            texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
             videos= videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
-            texts = texts.to(device)
+            if False:
+                final_text = run_example(generated_images, processor, flo_model)
+                texts  = final_text.to(device)
+            else:
+                texts = texts.to(device)
+
 
 
             ############## Calculate explainability loss between attn and mask ###########
@@ -258,7 +268,7 @@ def train_classifier(start_epoch,
             # scaler.update()
 
         if epoch % config.logging.eval_freq == 0:  # and epoch>0
-            prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
+            prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug) #, processor, flo_model)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
@@ -269,6 +279,7 @@ def train_classifier(start_epoch,
         epoch_saving(epoch, perceptor, fusion_model, optimizer, filename)
         if is_best:
             best_saving(working_dir, epoch, perceptor, fusion_model, optimizer)
+
 def main():
     global args, best_prec1
     global global_step
@@ -315,11 +326,11 @@ def main():
                                            emb_dropout=config.network.emb_dropout,
                                            pretrain=config.network.init, 
                                            joint = config.network.joint) #Must set jit=False for training  ViT-B/32
-    flo_model, vlm_state_dict, processor = flor2.load("BASE_FT", device)
-    flo_model.image_processor.crop_size['height'] = config.data.input_size
-    flo_model.image_processor.crop_size['width'] = config.data.input_size
-    flo_model.image_processor.size['height'] = config.data.input_size
-    flo_model.image_processor.size['width'] = config.data.input_size
+    # flo_model, processor = flor2.load("BASE_FT", device)
+    # flo_model.image_processor.crop_size['height'] = config.data.input_size
+    # flo_model.image_processor.crop_size['width'] = config.data.input_size
+    # flo_model.image_processor.size['height'] = config.data.input_size
+    # flo_model.image_processor.size['width'] = config.data.input_size
 
     # vlm_state_dict["text_projection"] = torch.empty((1, flo_model.config.text_config.d_model))
     # vlm_state_dict["positional_embedding"] = torch.empty((flo_model.config.text_config.vocab_size,))
@@ -396,13 +407,15 @@ def main():
                         drop_last=True,
                         collate_fn=collate_fn)
     else:
+
         def collate_fn(batch):
-            cropped_videos, images, bbs, labels = zip(*batch)
+            cropped_videos, images, bbs, generated_images, labels = zip(*batch)
             # Check the labels for bb
             cropped_videos = torch.stack(cropped_videos) 
             images = torch.stack(images) 
             labels = torch.tensor(labels)
-            return cropped_videos, images, labels
+            generated_images = torch.stack(generated_images)
+            return cropped_videos, images, generated_images, labels
 
         train_data = Action_DATASETS_orig(
                         config.data.train_list,
@@ -410,7 +423,8 @@ def main():
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
                         random_shift=config.data.random_shift,
-                        transform=transform_train)
+                        transform=transform_train,
+                        label_box=config.data.label_box)
         train_loader = DataLoader(
                         train_data,
                         batch_size=config.data.batch_size,
@@ -425,7 +439,8 @@ def main():
                         random_shift=False,
                         num_segments=config.data.num_segments,
                         image_tmpl=config.data.image_tmpl,
-                        transform=transform_val)
+                        transform=transform_val,
+                        label_box=config.data.label_box)
         val_loader = DataLoader(
                         val_data,
                         batch_size=config.data.batch_size,
@@ -486,7 +501,7 @@ def main():
 
     best_prec1 = 0.0
     if config.solver.evaluate:
-        prec1 = validate(start_epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug)
+        prec1 = validate(start_epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug) #, processor, flo_model)
         return
 
     # for k,v in model.named_parameters():
@@ -517,7 +532,9 @@ def main():
                      working_dir = working_dir,
                      device = device,
                      lambda_bb=config.data.lambda_bb,
-                     lambda_ce=config.data.lambda_ce)
+                     lambda_ce=config.data.lambda_ce) #,
+                     #processor= processor, 
+                     #flo_model = flo_model)
 
 
 if __name__ == '__main__':

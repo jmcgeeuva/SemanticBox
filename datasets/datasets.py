@@ -24,6 +24,28 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional, Tuple, Union
 from torchvision import transforms
 
+import re
+import matplotlib.pyplot as plt
+import math
+
+def unnormalize(bb, w, h):
+    new_bb = []
+    for b in bb:
+        if b % 2 != 0:
+            new_bb.append(math.ceil(b/1000)*h)
+        else:
+            new_bb.append((b/1000)*w)
+    return new_bb
+
+def normalize(bb, w, h):
+    new_bb = []
+    for b in bb:
+        if b % 2 != 0:
+            new_bb.append(math.ceil((b/h)*1000))
+        else:
+            new_bb.append(math.ceil((b/w)*1000))
+    return new_bb
+
 class GroupTransform(object):
     def __init__(self, transform):
         self.worker = transform
@@ -455,7 +477,6 @@ class Action_DATASETS_orig(data.Dataset):
         new_boxes = torch.stack([new_x0, new_y0, new_x1, new_y1], dim=1)
         return new_boxes, new_y1-new_y0, new_x1-new_x0
 
-
     def get(self, record, indices):
         images = list()
         bbs = list()
@@ -486,22 +507,17 @@ class Action_DATASETS_orig(data.Dataset):
                 ))
             )
 
-        # data = {'video': images, 'mask': image_masks}
-        # data = self.image_transform(data)
-        # process_data, image_masks = data['video'], data['mask']
-
         data = {'video': cropped_images, 'mask': None}
         data = self.transform(data)
         process_data, image_masks = data['video'], data['mask']
         
         data = {'video': images, 'mask': None}
         data = self.transform(data)
-        images, image_masks = data['video'], data['mask']
+        aug_images, image_masks = data['video'], data['mask']
 
-        # if self.debug:
-        return process_data, images, bbs, record.label
-        # else:
-        #     return process_data, record.label
+        generated_images = [transforms.ToTensor()(image) for image in images]
+        generated_images = torch.stack(generated_images)
+        return process_data, aug_images, bbs, generated_images, record.label
 
     def __len__(self):
         return len(self.video_list)
