@@ -17,6 +17,7 @@
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
+from .davit import *
 import math
 import torch
 import torch.utils.checkpoint
@@ -40,9 +41,9 @@ from transformers.utils import (
     is_flash_attn_2_available,
     is_flash_attn_greater_or_equal_2_10,
 )
-from configuration_florence2 import Florence2Config 
-from configuration_florence2 import Florence2LanguageConfig
-from configuration_florence2 import Florence2VisionConfig
+from .configuration_florence2 import Florence2Config 
+from .configuration_florence2 import Florence2LanguageConfig
+from .configuration_florence2 import Florence2VisionConfig
 
 
 from transformers.activations import ACT2FN
@@ -59,8 +60,8 @@ from transformers.modeling_outputs import (
     Seq2SeqModelOutput,
 )
 
-from modeling_florence2 import *
-from configuration_florence2 import *
+from .modeling_florence2 import *
+from .configuration_florence2 import *
 from transformers import AutoModelForCausalLM, AutoProcessor
 import torch
 
@@ -73,9 +74,8 @@ _CONFIG_FOR_DOC = "Florence2Config"
 
 from transformers.generation.utils import *
 
-from davit import *
-from florence_attn import *
-from processor import *
+from .florence_attn import *
+from .processor import *
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -1390,7 +1390,7 @@ class Florence2LanguageForConditionalGeneration(Florence2LanguagePreTrainedModel
         model_kwargs["use_cache"] = generation_config.use_cache
 
         # 10. go into different generation modes
-        print(generation_mode, GenerationMode)
+        # print(generation_mode, GenerationMode)
         if generation_mode == GenerationMode.ASSISTED_GENERATION:
             if generation_config.num_return_sequences > 1:
                 raise ValueError(
@@ -2285,4 +2285,4 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
     if str(device) == "cpu":
         model.float()
     
-    return model, model.state_dict(), processor
+    return model, processor

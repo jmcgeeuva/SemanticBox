@@ -40,9 +40,9 @@ from transformers.utils import (
     is_flash_attn_2_available,
     is_flash_attn_greater_or_equal_2_10,
 )
-from configuration_florence2 import Florence2Config 
-from configuration_florence2 import Florence2LanguageConfig
-from configuration_florence2 import Florence2VisionConfig
+from .configuration_florence2 import Florence2Config 
+from .configuration_florence2 import Florence2LanguageConfig
+from .configuration_florence2 import Florence2VisionConfig
 
 
 from transformers.activations import ACT2FN
@@ -59,8 +59,8 @@ from transformers.modeling_outputs import (
     Seq2SeqModelOutput,
 )
 
-from modeling_florence2 import *
-from configuration_florence2 import *
+from .modeling_florence2 import *
+from .configuration_florence2 import *
 from transformers import AutoModelForCausalLM, AutoProcessor
 import torch
 
