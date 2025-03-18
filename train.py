@@ -16,7 +16,7 @@ from dotmap import DotMap
 import pprint
 from modules.Visual_Prompt import visual_prompt
 from utils.KLLoss import KLLoss
-from test import validate, calculate_similarity, run_example
+from test import validate, calculate_similarity, run_example, test3, florence_activate
 from utils.Augmentation import *
 from utils.solver import _optimizer, _lr_scheduler
 from utils.tools import *
@@ -34,10 +34,13 @@ import random
 import torch
 import itertools
 
-# from florence.configuration_florence2 import *
-# from florence.florence_attn import *
-# import florence.modeling_florence2 as flor2
-# from florence.processor import *
+from florence.configuration_florence2 import *
+from florence.florence_attn import *
+import florence.modeling_florence2 as flor2
+from florence.processor import *
+
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
     # keys = sorted(list(label_names.keys()))
@@ -94,6 +97,7 @@ def train_classifier(start_epoch,
                      lr_scheduler,
                      config, 
                      text_dict,
+                     text_aug_dict,
                      model_image, 
                      model_text, 
                      fusion_model, 
@@ -106,9 +110,9 @@ def train_classifier(start_epoch,
                      working_dir,
                      device,
                      lambda_bb,
-                     lambda_ce): #,
-                     #processor,
-                     #flo_model):
+                     lambda_ce,
+                     processor,
+                     flo_model):
     best_prec1 = -1
     cross_entropy = nn.CrossEntropyLoss()
     clamp_with_grad = ClampWithGrad.apply
@@ -160,19 +164,11 @@ def train_classifier(start_epoch,
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
-            # if len(data) > 3:
-            #     videos, aug_masks, lambdas, list_id = data
-            #     aug_masks = aug_masks.to(device)
-            #     lambdas = lambdas.to(device)
-            if len(data) > 2:
-                videos, orig_videos, generated_images, list_id = data
-                orig_videos = orig_videos.to(device)
-                list_id = list_id.to(device)
-                # generated_images = generated_images.to(device)
-                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            else:
-                videos, list_id = data
-                videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            videos, orig_videos, generated_images, bbs, list_id = data
+            orig_videos = orig_videos.to(device)
+            list_id = list_id.to(device)
+            # generated_images = generated_images.to(device)
+            videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
             
             b,t,c,h,w = videos.size()
             
@@ -180,13 +176,21 @@ def train_classifier(start_epoch,
 
             text_id = numpy.random.randint(num_text_aug,size=len(list_id))
 
-            texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
+            token_texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
+            real_texts = [text_aug_dict[j][i] for i,j in zip(list_id,text_id)]
             videos= videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
-            if False:
-                final_text = run_example(generated_images, processor, flo_model)
-                texts  = final_text.to(device)
+
+            if test3:
+                with torch.no_grad():
+                    final_text, bounded_text = run_example(generated_images, processor, flo_model, real_texts, bbs=bbs)
+                    texts  = final_text.to(device)
+                    bounded_texts = bounded_text.to(device)
+            elif florence_activate:
+                with torch.no_grad():
+                    final_text = run_example(generated_images, processor, flo_model, real_texts)
+                    texts  = final_text.to(device)
             else:
-                texts = texts.to(device)
+                texts = token_texts.to(device)
 
 
 
@@ -200,30 +204,36 @@ def train_classifier(start_epoch,
                 image_embedding = image_embedding.view(b,t,-1)
                 image_embedding = fusion_model(image_embedding)
 
+                if test3:
+                    text_embedding = model_text(bounded_text)
+                else:
+                    text_embedding = model_text(texts)
+
                 video_tensor = orig_videos.view(-1,c,h,w )
                 image_emb_orig = model_image(video_tensor)
                 image_emb_orig = image_emb_orig.view(b,t,-1)
                 image_emb_orig = fusion_model(image_emb_orig)
 
-                text_embedding = model_text(texts)
+                text_orig_embedding = model_text(texts)
 
             if config.network.fix_text:
                 text_embedding.detach_()
+                text_orig_embedding.detach_()
 
             logit_scale = perceptor.logit_scale.exp()
             logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
             if config.data.use_orig:
-                logits_per_image_orig, logits_per_text_orig = create_logits(image_emb_orig,text_embedding,logit_scale)
+                logits_per_image_orig, logits_per_text_orig = create_logits(image_emb_orig,text_orig_embedding,logit_scale)
             
-            if lambda_ce != 0:
-                text_inputs = classes.to(device)
-                text_features2 = perceptor.encode_text(text_inputs)
-                logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
-                logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
-                similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
-                similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
-                list_id = list_id.to(device)
-                ce_loss = cross_entropy(similarity+similarity_orig, list_id)
+            # if lambda_ce != 0:
+            #     text_inputs = classes.to(device)
+            #     text_features2 = perceptor.encode_text(text_inputs)
+            #     logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
+            #     logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
+            #     similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
+            #     similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
+            #     list_id = list_id.to(device)
+            #     ce_loss = cross_entropy(similarity+similarity_orig, list_id)
 
             # parameter = nn.Parameter()
             ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
@@ -268,7 +278,7 @@ def train_classifier(start_epoch,
             # scaler.update()
 
         if epoch % config.logging.eval_freq == 0:  # and epoch>0
-            prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug) #, processor, flo_model)
+            prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug, processor, flo_model, text_aug_dict)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
@@ -326,7 +336,7 @@ def main():
                                            emb_dropout=config.network.emb_dropout,
                                            pretrain=config.network.init, 
                                            joint = config.network.joint) #Must set jit=False for training  ViT-B/32
-    # flo_model, processor = flor2.load("BASE_FT", device)
+    flo_model, processor = flor2.load("BASE_FT", device)
     # flo_model.image_processor.crop_size['height'] = config.data.input_size
     # flo_model.image_processor.crop_size['width'] = config.data.input_size
     # flo_model.image_processor.size['height'] = config.data.input_size
@@ -353,6 +363,7 @@ def main():
     model_text = torch.nn.DataParallel(model_text).cuda()
     model_image = torch.nn.DataParallel(model_image).cuda()
     fusion_model = torch.nn.DataParallel(fusion_model).cuda()
+    flo_model = torch.nn.DataParallel(flo_model).cuda()
     wandb.watch(perceptor)
     wandb.watch(fusion_model)
 
@@ -388,7 +399,7 @@ def main():
                         batch_size=config.data.batch_size,
                         num_workers=config.data.workers,
                         shuffle=True,
-                        pin_memory=False,
+                        pin_memory=True,
                         drop_last=True, 
                         collate_fn=collate_fn)
         val_data = Action_DATASETS(
@@ -403,7 +414,7 @@ def main():
                         batch_size=config.data.batch_size,
                         num_workers=config.data.workers,
                         shuffle=False,
-                        pin_memory=False,
+                        pin_memory=True,
                         drop_last=True,
                         collate_fn=collate_fn)
     else:
@@ -415,7 +426,8 @@ def main():
             images = torch.stack(images) 
             labels = torch.tensor(labels)
             generated_images = torch.stack(generated_images)
-            return cropped_videos, images, generated_images, labels
+            bbs = torch.stack(bbs)
+            return cropped_videos, images, generated_images, bbs, labels
 
         train_data = Action_DATASETS_orig(
                         config.data.train_list,
@@ -486,7 +498,7 @@ def main():
         else:
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
-    classes, num_text_aug, text_dict = text_prompt(train_data, file_name=config.prompt)
+    classes, num_text_aug, text_dict, text_aug_dict = text_prompt(train_data, file_name=config.prompt)
 
     replace_grad = ReplaceGrad.apply
     # 1. Compile a proper list of the classes with label numbers
@@ -501,7 +513,7 @@ def main():
 
     best_prec1 = 0.0
     if config.solver.evaluate:
-        prec1 = validate(start_epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug) #, processor, flo_model)
+        prec1 = validate(start_epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug, processor, flo_model)
         return
 
     # for k,v in model.named_parameters():
@@ -520,6 +532,7 @@ def main():
                      lr_scheduler = lr_scheduler,
                      config = config, 
                      text_dict = text_dict,
+                     text_aug_dict = text_aug_dict,
                      model_image = model_image, 
                      model_text = model_text, 
                      fusion_model = fusion_model, 
@@ -532,9 +545,9 @@ def main():
                      working_dir = working_dir,
                      device = device,
                      lambda_bb=config.data.lambda_bb,
-                     lambda_ce=config.data.lambda_ce) #,
-                     #processor= processor, 
-                     #flo_model = flo_model)
+                     lambda_ce=config.data.lambda_ce,
+                     processor= processor, 
+                     flo_model = flo_model)
 
 
 if __name__ == '__main__':

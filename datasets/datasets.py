@@ -28,24 +28,6 @@ import re
 import matplotlib.pyplot as plt
 import math
 
-def unnormalize(bb, w, h):
-    new_bb = []
-    for b in bb:
-        if b % 2 != 0:
-            new_bb.append(math.ceil(b/1000)*h)
-        else:
-            new_bb.append((b/1000)*w)
-    return new_bb
-
-def normalize(bb, w, h):
-    new_bb = []
-    for b in bb:
-        if b % 2 != 0:
-            new_bb.append(math.ceil((b/h)*1000))
-        else:
-            new_bb.append(math.ceil((b/w)*1000))
-    return new_bb
-
 class GroupTransform(object):
     def __init__(self, transform):
         self.worker = transform
@@ -517,6 +499,9 @@ class Action_DATASETS_orig(data.Dataset):
 
         generated_images = [transforms.ToTensor()(image) for image in images]
         generated_images = torch.stack(generated_images)
+        
+        bbs = torch.stack(bbs)
+
         return process_data, aug_images, bbs, generated_images, record.label
 
     def __len__(self):

@@ -31,6 +31,38 @@ import numpy as np
 from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
 from torchvision import transforms
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
+import os
+import random
+import math
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+florence_activate = False
+if not florence_activate:
+    test1 = False
+    test2 = False
+    test3 = False
+else:
+    test1 = False
+    test2 = False
+    test3 = False
+
+def unnormalize(bb, w, h):
+    new_bb = []
+    for b in bb:
+        if b % 2 != 0:
+            new_bb.append(math.ceil(b/1000)*h)
+        else:
+            new_bb.append((b/1000)*w)
+    return new_bb
+
+def normalize(bb, w, h):
+    new_bb = []
+    for b in bb:
+        if b % 2 != 0:
+            new_bb.append(math.ceil((b/h)*1000))
+        else:
+            new_bb.append(math.ceil((b/w)*1000))
+    return new_bb
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,
                           normalize=False,
@@ -108,35 +140,125 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     similarity = similarity.mean(dim=1, keepdim=False)
     return similarity
 
-def run_example(cropped_images, processor, model, bbs=None, label=None, text_input=None, debug=False):
-    if bbs != None:
-        norm_bbs = []
-        for bb in bbs:
-            bb = normalize(bb, cropped_images[0].size[0], cropped_images[0].size[1])
-            norm_bbs.append(bb)
-        prompt_r2d = '<REGION_TO_DESCRIPTION>'
-        for dim in bb:
-            prompt_r2d += f'<loc_{dim}>'
+def run_example(generated_images, processor, model, real_texts, bbs=None, label=None, text_input=None, debug=False, test=False):
 
-    prompt_type = '<CAPTION>' #'<DETAILED_CAPTION>'
-    prompt = [prompt_type for _ in cropped_images]
+    REGION_TO_DESCRIPTION = 'REGION_TO_DESCRIPTION'
+    CAPTION = 'CAPTION'
+
+    prompt_type = f'<{CAPTION}>' #'<DETAILED_CAPTION>'
+    prompt_cap = [prompt_type for _ in generated_images]
+
     # Just choose one frame to create a caption for
-    cropped_images = [transforms.ToPILImage()(images[0]) for images in cropped_images]
-    inputs = processor(text=prompt, images=cropped_images, return_tensors="pt", padding=False)
+    if not test2:
+        cropped_images = [transforms.ToPILImage()(images[0]) for images in generated_images]
+    else:
+        cropped_images = [transforms.ToPILImage()(images[random.randint(0, len(images)-1)]) for images in generated_images]
+    
+    bounded_text = []
+    if bbs != None:
+        # [16, 8, 4] = [B, T, C]
+        prompts_r2d = []
+        bbs = bbs[:, 0, :]
+        width = cropped_images[0].size[0]
+        height = cropped_images[0].size[1]
+        for bb in bbs:
+            norm_bb = normalize(bb.tolist(), width, height)
+        
+            prompt_r2d = f'<{REGION_TO_DESCRIPTION}>'
+            for dim in norm_bb:
+                prompt_r2d += f'<loc_{dim}>'
+            prompts_r2d.append(prompt_r2d)
+        
+        generated_texts = []
+        text_dict = {
+            CAPTION: [],
+            REGION_TO_DESCRIPTION: []
+        }
+        for task, prompt, padding in [(CAPTION, prompt_cap, False), (REGION_TO_DESCRIPTION, prompts_r2d, True)]:
+            inputs = processor(text=prompt, images=cropped_images, return_tensors="pt", padding=padding)
 
-    generated_ids = model.generate(
-        input_ids=inputs["input_ids"],
-        pixel_values=inputs["pixel_values"],
-        max_new_tokens=512,
-        early_stopping=False,
-        do_sample=False,
-        num_beams=3,
-    )
+            input_ids = inputs["input_ids"].to(model.module.device)
+            pixel_values = inputs["pixel_values"].to(model.module.device)
+            generated_ids = model.module.generate(
+                input_ids=input_ids,
+                pixel_values=pixel_values,
+                max_new_tokens=512,
+                early_stopping=False,
+                do_sample=False,
+                num_beams=3,
+            )
+            generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)
+            
+            for this_text, this_prompt in zip(generated_text, prompt):
+                parsed_answer = processor.post_process_generation(
+                    this_text,
+                    task=this_prompt,
+                    image_size=(width, height)
+                )
+                text_dict[task].append(parsed_answer[this_prompt])
 
-    generated_text =processor.batch_decode(generated_ids, skip_special_tokens=True)
+        
+        generated_text = text_dict[CAPTION]
+        bounded_text = text_dict[REGION_TO_DESCRIPTION]
+    else:
+        prompt = prompt_cap
+        inputs = processor(text=prompt, images=cropped_images, return_tensors="pt", padding=False)
+
+        input_ids = inputs["input_ids"].to(model.module.device)
+        pixel_values = inputs["pixel_values"].to(model.module.device)
+        generated_ids = model.module.generate(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            max_new_tokens=512,
+            early_stopping=False,
+            do_sample=False,
+            num_beams=3,
+        )
+        generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)
+
+
+    if not test:
+        generated_text = [prompt_text.capitalize() + ": " + text.replace('<s>', '').replace('</s>', '') for text, prompt_text in zip(generated_text, real_texts)]
+        final_text = torch.stack([clip.tokenize(text) for text in generated_text])
+        if bounded_text != []:
+            bounded_test = [prompt_text.capitalize() + ": This is a " + text.replace('<s>', '').replace('</s>', '') for text, prompt_text in zip(bounded_text, real_texts)]
+            final_bounded_text = torch.stack([clip.tokenize(text) for text in bounded_test])
+            return final_text.squeeze(dim=1), final_bounded_text.squeeze(dim=1)
+        return final_text.squeeze(dim=1)
+    else:
+        # There are 16 lists of phrases
+        final_texts = []
+        final_texts_dict = {
+            CAPTION: [],
+            REGION_TO_DESCRIPTION: []
+        }
+        for text_list in real_texts:
+            # There are 6 classes for each phrase
+            curr_gen_text = [prompt_text.capitalize() + ": " + text.replace('<s>', '').replace('</s>', '') for text, prompt_text in zip(generated_text, text_list)]
+            final_text = torch.stack([clip.tokenize(text) for text in curr_gen_text])
+            if bounded_text != []:
+                bounded_test = [prompt_text.capitalize() + ": " + text.replace('<s>', '').replace('</s>', '') for text, prompt_text in zip(bounded_text, text_list)]
+                final_bounded_text = torch.stack([clip.tokenize(text) for text in bounded_test])
+                final_texts_dict[CAPTION].append(final_text.squeeze(dim=1))
+                final_texts_dict[REGION_TO_DESCRIPTION].append(final_bounded_text.squeeze(dim=1))
+            else:
+                # List of 16 texts 
+                final_texts.append(final_text)
+        
+        if bounded_text == []:
+            final_texts = torch.stack(final_texts)
+            final_texts = final_texts.view(-1, final_texts.shape[-1])
+            return final_texts
+        else:
+            final_texts = torch.stack(final_texts_dict[CAPTION])
+            final_texts = final_texts.view(-1, final_texts.shape[-1])
+
+            final_bounded_texts = torch.stack(final_texts_dict[REGION_TO_DESCRIPTION])
+            final_bounded_texts = final_bounded_texts.view(-1, final_bounded_texts.shape[-1])
+            return final_texts, final_bounded_texts
 
     # print([len(text.split()) for text in generated_text])
-    final_text = torch.stack([clip.tokenize(text.replace('<s>', '').replace('</s>', '')) for text in generated_text])
+    
     # final_text += ' This is a ' + re.sub(r"<loc_\d+>", "", generated_text[1][0]).replace('<s>', '').replace('</s>', '')
     # print(f"generated_text ---> {generated_text}")
 
@@ -148,15 +270,8 @@ def run_example(cropped_images, processor, model, bbs=None, label=None, text_inp
     #         plt.axis('off')
     #         fig.text(0.5, 0.05, final_text, wrap=True, ha='center')
     #         plt.savefig(f'test.png')
-    # parsed_answer = processor.post_process_generation(
-    #     generated_text,
-    #     task=prompts,
-    #     image_size=(videos.shape[-1], videos.shape[-1])
-    # )
 
-    return final_text.squeeze(dim=1)
-
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug): #, processor, flo_model):
+def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, processor, flo_model, text_aug_dict):
     model.eval()
     fusion_model.eval()
     num = 0
@@ -165,24 +280,31 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
 
     labeled_ids = []
     correct_ids = []
+    classes_aug = [v for k, v in text_aug_dict.items()]
     with torch.no_grad():
-        text_inputs = classes.to(device)
-        text_features = model.encode_text(text_inputs)
         for iii, data in enumerate(tqdm(val_loader)):
             
-            if len(data) > 2:
-                image, orig_videos, generated_images, class_id = data
-                orig_videos = orig_videos.to(device)
-                class_id = class_id.to(device)
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
-            else:
-                image, class_id = data
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
+            image, orig_videos, generated_images, bbs, class_id = data
+            orig_videos = orig_videos.to(device)
+            class_id = class_id.to(device)
+            image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
 
-            if False:
-                final_text = run_example(generated_images, processor, flo_model)
+            if test1:
+                final_text = run_example(generated_images, processor, flo_model, classes_aug, test=True)
                 final_text = final_text.to(device)
                 text_features = model.encode_text(final_text)
+            elif test3:
+                final_text, bounded_text = run_example(generated_images, processor, flo_model, classes_aug, test=True, bbs=bbs)
+                final_text = final_text.to(device)
+                bounded_text = bounded_text.to(device)
+                text_features = model.encode_text(final_text)
+                text_bounded_features = model.encode_text(bounded_text)
+            else:
+                text_inputs = classes.to(device)
+                text_features = model.encode_text(text_inputs)
+
+
+
 
             # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
             b, t, c, h, w = image.size()
@@ -203,8 +325,11 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
                 image_features = image_features.view(b,t,-1)
                 image_features = fusion_model(image_features)
                 image_features /= image_features.norm(dim=-1, keepdim=True)
-                text_features /= text_features.norm(dim=-1, keepdim=True)
-                logits_per_image = (100.0 * image_features @ text_features.T)
+                if test3:
+                    text_bounded_features /= text_bounded_features.norm(dim=-1, keepdim=True)
+                else:
+                    text_bounded_features = text_features
+                logits_per_image = (100.0 * image_features @ text_bounded_features.T)
                 similarity = similarity + calculate_similarity(logits_per_image, b, num_text_aug)
 
             values_1, indices_1 = similarity.topk(1, dim=-1)

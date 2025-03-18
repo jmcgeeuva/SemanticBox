@@ -81,6 +81,7 @@ if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
+from peft import LoraConfig, get_peft_model
 
 def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
     """
@@ -2272,17 +2273,38 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
     processor = Florence2Processor.from_pretrained(model_path, trust_remote_code=True, device_map='auto', revision='refs/pr/6')
     state_dict = auto_model.state_dict()
 
-    config = auto_model.config
-    model = Florence2ForConditionalGeneration(
-        config
-    )
+    lora = True
+    if lora:
+        config = LoraConfig(
+            r=8,
+            lora_alpha=8,
+            target_modules=[
+                "q_proj", "o_proj", "k_proj", "v_proj", "linear", "Conv2d", "lm_head",
+                "fc2"
+            ],
+            task_type="CAUSAL_LM",
+            lora_dropout=0.05,
+            bias="none",
+            inference_mode=False,
+            use_rslora=True,
+            init_lora_weights="gaussian",
+        )
 
-    # convert_weights(model)
-    pretrain = True
-    if pretrain:
-        model.load_state_dict(state_dict)
+        model = get_peft_model(auto_model, config)
+        model = model.to(device)
+    else:
 
-    if str(device) == "cpu":
-        model.float()
+        config = auto_model.config
+        model = Florence2ForConditionalGeneration(
+            config
+        )
+
+        # convert_weights(model)
+        pretrain = True
+        if pretrain:
+            model.load_state_dict(state_dict)
+
+        if str(device) == "cpu":
+            model.float()
     
     return model, processor
