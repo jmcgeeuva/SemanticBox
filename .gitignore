@@ -14,3 +14,4 @@ balanced_frames/
 models/
 images/
 logs/*
+slurm-*out
