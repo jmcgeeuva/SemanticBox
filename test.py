@@ -43,7 +43,7 @@ if not florence_activate:
     test3 = False
 else:
     test1 = False
-    test2 = False
+    test2 = True
     test3 = False
 
 def unnormalize(bb, w, h):

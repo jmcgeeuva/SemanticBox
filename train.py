@@ -478,7 +478,7 @@ def main():
     if config.pretrain:
         if os.path.isfile(config.pretrain):
             print(("=> loading checkpoint '{}'".format(config.pretrain)))
-            checkpoint = torch.load(config.pretrain)
+            checkpoint = torch.load(config.pretrain, map_location='cpu')
             perceptor.load_state_dict(checkpoint['model_state_dict'])
             fusion_model.load_state_dict(checkpoint['fusion_model_state_dict'])
             del checkpoint

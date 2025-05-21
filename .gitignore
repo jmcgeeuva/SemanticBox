@@ -10,3 +10,7 @@ thumb.sdb
 .idea
 wandb/
 trained_models/
+balanced_frames/
+models/
+images/
+logs/*
