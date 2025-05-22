@@ -14,8 +14,8 @@ data:
     image_tmpl: '{:04d}.jpg'
     train_list: './splits/split_reduced/trainnewsplit01.txt'
     val_list: './splits/split_reduced/testnewsplit01.txt' #
-    # train_list: '../../splits/split/trainsplit00.txt'
-    # val_list: '../../splits/split/testsplit00.txt' #
+    # train_list: './splits/split/trainsplit00.txt'
+    # val_list: './splits/split/testsplit00.txt' #
     label_list: './splits/split_reduced/education_6_labels.csv'
     index_bias: 1
     input_size: 224
