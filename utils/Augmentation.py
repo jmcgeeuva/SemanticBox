@@ -69,6 +69,7 @@ def get_mask_augmentation(cut_size, cutn, cut_pow=1., noise_fac = 0.1):
 def get_augmentation(training, config):
     input_mean=[0.5, 0.5, 0.5]
     input_std=[0.5, 0.5, 0.5]
+    # FIXME Change this back: https://github.com/openai/CLIP/issues/20
     # input_mean = [0.48145466, 0.4578275, 0.40821073]
     # input_std = [0.26862954, 0.26130258, 0.27577711]
     scale_size = config.data.input_size * 256 // 224
