@@ -29,21 +29,20 @@ data:
         activate: True
         use_bounded_text: False
         random_frame: False
-        generated_test: True
     randaug:
         N: 2 #2
         M: 9  #9
     random_shift: True
     weighted_features: 
         use: True
-        learned: False
+        learned: True
     weights:
         # Image weight
         lambda_ff: .5
         lambda_bb: .5
         # Text weight
         lambda_en: 1
-        lambda_ge: 0
+        # lambda_ge: 1
         # Florence weight
         mu: 0
     label_box: False # if False use teacher

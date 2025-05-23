@@ -8,7 +8,7 @@ just:
     image: False
     text: False
 loss:
-    image: .5
+    image: 1
 data:
     dataset: education6
     modality: RGB
@@ -43,10 +43,10 @@ data:
         lambda_bb: .5
         # Text weight
         lambda_en: 1
-        lambda_ge: 0
+        # lambda_ge: 1
         # Florence weight
         mu: 0
-    label_box: False # if False use teacher
+    label_box: True # if False use teacher
 network:
     arch: ViT-B/32  #ViT-B/32 ViT-B/16
     init: True

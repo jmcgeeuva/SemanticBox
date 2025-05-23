@@ -10,7 +10,7 @@
 #SBATCH -A eng_viva
 #SBATCH --mail-type=begin,end
 #SBATCH --mail-user=tkg5kq@virginia.edu
-#SBATCH -a 1-221%100
+#SBATCH -a 11-12%2
 
 LOG_DIR="logs"
 if [ ! -d "$LOG_DIR" ]; then

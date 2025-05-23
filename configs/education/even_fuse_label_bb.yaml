@@ -4,9 +4,6 @@ test_name: generic_test
 seed: 1737328734
 prompt: './prompts/generic_prompts.txt'
 use_calc_norm: False
-just:
-    image: False
-    text: False
 loss:
     image: .5
 data:
@@ -46,7 +43,7 @@ data:
         lambda_ge: 0
         # Florence weight
         mu: 0
-    label_box: False # if False use teacher
+    label_box: True # if False use teacher
 network:
     arch: ViT-B/32  #ViT-B/32 ViT-B/16
     init: True

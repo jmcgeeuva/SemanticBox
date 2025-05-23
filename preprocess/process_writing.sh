@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess-writing
-#SBATCH --time=0-01:00:00
+#SBATCH --time=0-02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=20 # number of cores/processors
 #SBATCH --mem=50G
@@ -10,7 +10,7 @@
 #SBATCH -A eng_viva
 #SBATCH --mail-type=begin,end
 #SBATCH --mail-user=tkg5kq@virginia.edu
-#SBATCH -a 1-890%100
+#SBATCH -a 13,51-58,175,189,323,891-1324%100
 
 LOG_DIR="logs"
 if [ ! -d "$LOG_DIR" ]; then

@@ -4,11 +4,6 @@ test_name: generic_test
 seed: 1737328734
 prompt: './prompts/generic_prompts.txt'
 use_calc_norm: False
-just:
-    image: False
-    text: False
-loss:
-    image: .5
 data:
     dataset: education6
     modality: RGB
@@ -25,11 +20,6 @@ data:
     label_list: './splits/split_reduced/education_6_labels.csv'
     index_bias: 1
     input_size: 224
-    florence:
-        activate: True
-        use_bounded_text: False
-        random_frame: False
-        generated_test: True
     randaug:
         N: 2 #2
         M: 9  #9
@@ -39,11 +29,11 @@ data:
         learned: False
     weights:
         # Image weight
-        lambda_ff: .5
-        lambda_bb: .5
+        lambda_ff: 0
+        lambda_bb: 0
         # Text weight
         lambda_en: 1
-        lambda_ge: 0
+        # lambda_ge: 1
         # Florence weight
         mu: 0
     label_box: False # if False use teacher

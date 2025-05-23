@@ -8,7 +8,7 @@ sys.path.insert(0, "./../explainable_bounding_box/ml-no-token-left-behind/extern
 sys.path.append("./../explainable_bounding_box/ml-no-token-left-behind/external/TransformerMMExplainability/")
 import CLIP.clip as clip
 import torch.nn as nn
-from datasets import Action_DATASETS, Action_DATASETS_orig
+from datasets import EducationBBDataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
@@ -35,16 +35,6 @@ import os
 import random
 import math
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-florence_activate = False
-if not florence_activate:
-    test1 = False
-    test2 = False
-    test3 = False
-else:
-    test1 = False
-    test2 = True
-    test3 = False
 
 def unnormalize(bb, w, h):
     new_bb = []
@@ -140,7 +130,7 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     similarity = similarity.mean(dim=1, keepdim=False)
     return similarity
 
-def run_example(generated_images, processor, model, real_texts, bbs=None, label=None, text_input=None, debug=False, test=False):
+def run_example(generated_images, processor, model, real_texts, config, bbs=None, label=None, text_input=None, debug=False, test=False):
 
     REGION_TO_DESCRIPTION = 'REGION_TO_DESCRIPTION'
     CAPTION = 'CAPTION'
@@ -149,7 +139,7 @@ def run_example(generated_images, processor, model, real_texts, bbs=None, label=
     prompt_cap = [prompt_type for _ in generated_images]
 
     # Just choose one frame to create a caption for
-    if not test2:
+    if not config.data.florence.random_frame:
         cropped_images = [transforms.ToPILImage()(images[0]) for images in generated_images]
     else:
         cropped_images = [transforms.ToPILImage()(images[random.randint(0, len(images)-1)]) for images in generated_images]
@@ -226,57 +216,31 @@ def run_example(generated_images, processor, model, real_texts, bbs=None, label=
             return final_text.squeeze(dim=1), final_bounded_text.squeeze(dim=1)
         return final_text.squeeze(dim=1)
     else:
-        # There are 16 lists of phrases
-        final_texts = []
-        final_texts_dict = {
-            CAPTION: [],
-            REGION_TO_DESCRIPTION: []
-        }
-        for text_list in real_texts:
-            # There are 6 classes for each phrase
-            curr_gen_text = [prompt_text.capitalize() + ": " + text.replace('<s>', '').replace('</s>', '') for text, prompt_text in zip(generated_text, text_list)]
-            final_text = torch.stack([clip.tokenize(text) for text in curr_gen_text])
-            if bounded_text != []:
-                bounded_test = [prompt_text.capitalize() + ": " + text.replace('<s>', '').replace('</s>', '') for text, prompt_text in zip(bounded_text, text_list)]
-                final_bounded_text = torch.stack([clip.tokenize(text) for text in bounded_test])
-                final_texts_dict[CAPTION].append(final_text.squeeze(dim=1))
-                final_texts_dict[REGION_TO_DESCRIPTION].append(final_bounded_text.squeeze(dim=1))
-            else:
-                # List of 16 texts 
-                final_texts.append(final_text)
-        
+        # There are 6 classes for each phrase
+        final_texts = {}
+        num_text_aug = len(generated_text)
+        for ii, txt in enumerate(generated_text):
+            final_texts[ii] = torch.cat([clip.tokenize(prompt_text.capitalize() + ": " + txt.replace('<s>', '').replace('</s>', '')) for prompt_text in real_texts])
+        gen_classes = torch.cat([v for k, v in final_texts.items()])
+
         if bounded_text == []:
-            final_texts = torch.stack(final_texts)
-            final_texts = final_texts.view(-1, final_texts.shape[-1])
-            return final_texts
+            return num_text_aug, gen_classes
         else:
-            final_texts = torch.stack(final_texts_dict[CAPTION])
-            final_texts = final_texts.view(-1, final_texts.shape[-1])
+            final_bounded_text = {}
+            for ii, gen_text in enumerate(bounded_text):
+                final_bounded_text[ii] = torch.cat([clip.tokenize(prompt_text.capitalize() + ": " + gen_text.replace('<s>', '').replace('</s>', '')) for prompt_text in real_texts])
+            gen_bounded_classes = torch.cat([v for k, v in final_bounded_text.items()])
+            # final_texts = torch.cat(final_texts_dict[CAPTION])
+            # final_bounded_texts = torch.cat(final_texts_dict[REGION_TO_DESCRIPTION])
+            return num_text_aug, gen_classes, gen_bounded_classes
+        
 
-            final_bounded_texts = torch.stack(final_texts_dict[REGION_TO_DESCRIPTION])
-            final_bounded_texts = final_bounded_texts.view(-1, final_bounded_texts.shape[-1])
-            return final_texts, final_bounded_texts
-
-    # print([len(text.split()) for text in generated_text])
-    
-    # final_text += ' This is a ' + re.sub(r"<loc_\d+>", "", generated_text[1][0]).replace('<s>', '').replace('</s>', '')
-    # print(f"generated_text ---> {generated_text}")
-
-    # if debug:
-    #     with open('test.txt', 'w') as f:
-    #         fig = plt.figure()
-    #         plt.imshow(image)
-    #         plt.title(label)
-    #         plt.axis('off')
-    #         fig.text(0.5, 0.05, final_text, wrap=True, ha='center')
-    #         plt.savefig(f'test.png')
-
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug, processor, flo_model, text_aug_dict):
-    model.eval()
+def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_model, config, num_text_aug, processor, flo_model, text_aug_dict, lambda_bb, lambda_ff):
+    clip_model.eval()
     fusion_model.eval()
     num = 0
     corr_1 = 0
-    corr_5 = 0
+    corr_3 = 0
 
     labeled_ids = []
     correct_ids = []
@@ -284,62 +248,92 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
     with torch.no_grad():
         for iii, data in enumerate(tqdm(val_loader)):
             
-            image, orig_videos, generated_images, bbs, class_id = data
-            orig_videos = orig_videos.to(device)
+            bb_video, ff_video, generated_images, bbs, class_id = data
+            ff_video = ff_video.to(device)
             class_id = class_id.to(device)
-            image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
+            bb_video = bb_video.view((-1,config.data.num_segments,3)+bb_video.size()[-2:])
 
-            if test1:
-                final_text = run_example(generated_images, processor, flo_model, classes_aug, test=True)
-                final_text = final_text.to(device)
-                text_features = model.encode_text(final_text)
-            elif test3:
-                final_text, bounded_text = run_example(generated_images, processor, flo_model, classes_aug, test=True, bbs=bbs)
+            if not config.data.florence.activate:
+                # Original ActionCLIP
+                text_inputs = classes.to(device)
+                ff_text_features = clip_model.encode_text(text_inputs)
+            elif config.data.florence.use_bounded_text:
+                # With bounding box text content
+                num_text_aug, final_text, bounded_text = run_example(generated_images, processor, flo_model, class_text, config, test=True, bbs=bbs)
                 final_text = final_text.to(device)
                 bounded_text = bounded_text.to(device)
-                text_features = model.encode_text(final_text)
-                text_bounded_features = model.encode_text(bounded_text)
+                ff_text_features = clip_model.encode_text(final_text)
+                bb_text_features = clip_model.encode_text(bounded_text)
             else:
-                text_inputs = classes.to(device)
-                text_features = model.encode_text(text_inputs)
-
-
-
+                if config.data.florence.generated_test:
+                    # No bounding box text content
+                    num_text_aug, final_text = run_example(generated_images, processor, flo_model, class_text, config, test=True)
+                    final_text = final_text.to(device)
+                    ff_text_features = clip_model.encode_text(final_text)
+                else:
+                    text_inputs = classes.to(device)
+                    ff_text_features = clip_model.encode_text(text_inputs)
 
             # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
-            b, t, c, h, w = image.size()
+            b, t, c, h, w = bb_video.size()
             class_id = class_id.to(device)
-            image_input = image.to(device).view(-1, c, h, w)
-            image_features = model.encode_image(image_input)
-            image_features = image_features.view(b,t,-1)
-            image_features = fusion_model(image_features)
-            image_features /= image_features.norm(dim=-1, keepdim=True)
-            text_features /= text_features.norm(dim=-1, keepdim=True)
-            logits_per_image = (100.0 * image_features @ text_features.T)
-            similarity = calculate_similarity(logits_per_image, b, num_text_aug)
+            
+            # Text
+            ff_text_features /= ff_text_features.norm(dim=-1, keepdim=True)
+            if config.data.florence.use_bounded_text:
+                bb_text_features /= text_bounded_features.norm(dim=-1, keepdim=True)
+            else:
+                bb_text_features = ff_text_features
 
-            if config.data.use_orig:
-                orig_videos = orig_videos.squeeze(dim=1)
-                image_input = orig_videos.to(device).view(-1, c, h, w)
-                image_features = model.encode_image(image_input)
-                image_features = image_features.view(b,t,-1)
-                image_features = fusion_model(image_features)
-                image_features /= image_features.norm(dim=-1, keepdim=True)
-                if test3:
-                    text_bounded_features /= text_bounded_features.norm(dim=-1, keepdim=True)
+            # Bounding Box Video and Full frame Video
+            bb_image_input = bb_video.to(device).view(-1, c, h, w)
+            bb_image_features = clip_model.encode_image(bb_image_input)
+            bb_image_features = bb_image_features.view(b,t,-1)
+            bb_image_features = fusion_model(bb_image_features)
+
+            ff_video = ff_video.squeeze(dim=1)
+            ff_image_input = ff_video.to(device).view(-1, c, h, w)
+            ff_image_features = clip_model.encode_image(ff_image_input)
+            ff_image_features = ff_image_features.view(b,t,-1)
+            ff_image_features = fusion_model(ff_image_features)
+            
+            if config.data.weighted_features.use:
+                # Fuse
+                if config.data.weighted_features.learned:
+                    image_features = lambda_bb.to(dtype=bb_image_features.dtype)*bb_image_features + lambda_ff.to(dtype=ff_image_features.dtype)*ff_image_features
                 else:
-                    text_bounded_features = text_features
-                logits_per_image = (100.0 * image_features @ text_bounded_features.T)
-                similarity = similarity + calculate_similarity(logits_per_image, b, num_text_aug)
+                    image_features = lambda_bb*bb_image_features + lambda_ff*ff_image_features
+                text_features = ff_text_features
+
+                # Normalize
+                image_features /= image_features.norm(dim=-1, keepdim=True)
+                
+                # Create Logits
+                logits_per_image = (100.0 * image_features @ text_features.T)
+            
+                # Decision making
+                similarity = calculate_similarity(logits_per_image, b, num_text_aug)
+            else:
+                # Normalize
+                bb_image_features /= bb_image_features.norm(dim=-1, keepdim=True)
+                ff_image_features /= ff_image_features.norm(dim=-1, keepdim=True)
+                
+                # Create Logits
+                bb_logits_per_image = (100.0 * bb_image_features @ ff_text_features.T)
+                ff_logits_per_image = (100.0 * ff_image_features @ bb_text_features.T)
+            
+                # Decision making
+                similarity = calculate_similarity(bb_logits_per_image, b, num_text_aug)
+                similarity = similarity + calculate_similarity(ff_logits_per_image, b, num_text_aug)
 
             values_1, indices_1 = similarity.topk(1, dim=-1)
-            values_5, indices_5 = similarity.topk(5, dim=-1)
+            values_3, indices_3 = similarity.topk(3, dim=-1)
             num += b
             for i in range(b):
                 if indices_1[i] == class_id[i]:
                     corr_1 += 1
-                if class_id[i] in indices_5[i]:
-                    corr_5 += 1
+                if class_id[i] in indices_3[i]:
+                    corr_3 += 1
     
             yhat = torch.argmax(similarity, dim=1).to(dtype=int)
             labeled_ids.extend(yhat.tolist())
@@ -348,10 +342,10 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
     plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
 
     top1 = float(corr_1) / num * 100
-    top5 = float(corr_5) / num * 100
+    top3 = float(corr_3) / num * 100
     wandb.log({"top1": top1})
-    wandb.log({"top5": top5})
-    print('Epoch: [{}/{}]: Top1: {}, Top5: {}'.format(epoch, config.solver.epochs, top1, top5))
+    wandb.log({"top3": top3})
+    print('Epoch: [{}/{}]: Top1: {}, Top3: {}'.format(epoch, config.solver.epochs, top1, top3))
     return top1
 
 def main():
@@ -448,7 +442,7 @@ def main():
             labels = torch.tensor(labels)
             return cropped_videos, images, labels
 
-        val_data = Action_DATASETS_orig(
+        val_data = EducationBBDataset(
                         config.data.val_list,
                         config.data.label_list, 
                         random_shift=False,
@@ -487,7 +481,7 @@ def main():
     classes, num_text_aug, text_dict = text_prompt(val_data, config.prompt)
 
     best_prec1 = 0.0
-    prec1 = validate(start_epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug)
+    prec1 = validate(start_epoch, val_loader, classes, class_text, device, model, fusion_model, config, num_text_aug)
 
 if __name__ == '__main__':
     main()

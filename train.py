@@ -4,7 +4,7 @@
 
 import os
 import torch.nn as nn
-from datasets import Action_DATASETS, Action_DATASETS_orig
+from datasets import EducationBBDataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
@@ -16,7 +16,7 @@ from dotmap import DotMap
 import pprint
 from modules.Visual_Prompt import visual_prompt
 from utils.KLLoss import KLLoss
-from test import validate, calculate_similarity, run_example, test3, florence_activate
+from test import validate, run_example
 from utils.Augmentation import *
 from utils.solver import _optimizer, _lr_scheduler
 from utils.tools import *
@@ -25,11 +25,8 @@ from utils.saving import  *
 import sys
 sys.path.insert(0, "../explainable_bounding_box/ml-no-token-left-behind/external/tamingtransformers/")
 sys.path.append("./../explainable_bounding_box/ml-no-token-left-behind/external/TransformerMMExplainability/")
-from prompt import PromptLoss, TextCLIP, ImageCLIP
-from prompt import PromptLoss2 as pl2
 from helpers import *
 import random
-# from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
 
 import torch
 import itertools
@@ -42,121 +39,89 @@ from florence.processor import *
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
-    # keys = sorted(list(label_names.keys()))
-    res = {}
-    for label_num, label_name in label_names:
-        prompt = f'Video of a teacher {" ".join(label_name.split("_"))}'
-        res[label_num] = PromptLoss(prompt, perceptor, replace_grad).to(device)
-    return res
-    
-def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model):
-    lossAll = []
-    # per_frame = False
-    loop_list = True
-    text_list = []
-    image_list = []
-    if len(criterion_list) > 0:
-        # for each label in the list and for each invidividual video (there are 16 of them)
-        if loop_list:
-            videos = videos.reshape(b,t,c,h,w)
-            for idx, label in enumerate(list_id.detach().cpu()):
-                # find the loss for this specific bounding box
-                prompt_idx = int(label)
-                crit = criterion_list[prompt_idx]
-                curr_image = videos[idx]
-                curr_mask = aug_masks[idx]
-                curr_lambda = lambdas[idx]
-                token = texts[idx]
-    
-                res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
-                image_list.append(image_embedding)
-    
-                text_list.append(text_embedding[0])
-                lossAll.append(res)
-            loss_all = (sum(lossAll)/len(lossAll))
-            text_embedding = torch.stack(text_list)
-            image_embedding = torch.stack(image_list)
-            image_embedding = image_embedding.view(b,t,-1)
-            image_embedding = fusion_model(image_embedding)
-            # print(sum(lossAll), len(lossAll))
-        # else:
-        #     # give the loss function the current text to unify the two
-        #     videos = videos.reshape(b,t,c,h,w)
-        #     print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
-        #     loss_all = promptCrit(videos, aug_masks, lambdas, texts)
-        #     raise ValueError("test")
-    return loss_all, image_embedding, text_embedding
+class TextCLIP(nn.Module):
+    def __init__(self, model) :
+        super(TextCLIP, self).__init__()
+        self.model = model
+
+    def forward(self,text):
+        return self.model.encode_text(text)
+
+class ImageCLIP(nn.Module):
+    def __init__(self, model) :
+        super(ImageCLIP, self).__init__()
+        self.model = model
+
+    def forward(self,image):
+        return self.model.encode_image(image)
 
 
-def train_classifier(start_epoch, 
-                     loss_img,
-                     loss_txt,
-                     criterion_list,
-                     promptCrit,
-                     lr_scheduler,
-                     config, 
-                     text_dict,
-                     text_aug_dict,
-                     model_image, 
-                     model_text, 
-                     fusion_model, 
-                     train_loader, 
-                     val_loader, 
-                     optimizer, 
-                     num_text_aug,
-                     classes,
-                     perceptor,
-                     working_dir,
-                     device,
-                     lambda_bb,
-                     lambda_ce,
-                     processor,
-                     flo_model):
+def train_classifier(
+        # Models
+        ff_image_clip, 
+        ff_text_clip, 
+        ff_temp_trans,
+        flo_model,
+        flo_processor,
+        clip_perceptor,
+        
+        # Data Loaders 
+        train_loader, 
+        val_loader,
+        
+        # Miscelaneous configurations
+        start_epoch, 
+        device,
+        config,
+        working_dir, 
+        
+        # Loss
+        loss_img,
+        loss_txt,
+        
+        # Tokenized Text Dictionaries
+        text_dict,
+        text_aug_dict,
+        num_text_aug, 
+        classes,
+        class_text
+    ):
     best_prec1 = -1
     cross_entropy = nn.CrossEntropyLoss()
     clamp_with_grad = ClampWithGrad.apply
-
-    ##################################################
-    # e_dim = perceptor.quantize.e_dim
-    # n_toks = perceptor.quantize.n_e
-    # vqgan_weights = perceptor.quantize.embedding.weight
-    # z_min = vqgan_weights.min(dim=0).values[None, :, None, None]
-    # z_max = vqgan_weights.max(dim=0).values[None, :, None, None]
+        
+    if config.data.weighted_features.use:
+        if config.data.weighted_features.learned:
+            lambda_bb = nn.Parameter(torch.ones(config.data.batch_size, 512, requires_grad=True, device=device))
+            lambda_ff = nn.Parameter(torch.ones(config.data.batch_size, 512, requires_grad=True, device=device))
+            lambda_en = nn.Parameter(torch.ones(config.data.batch_size, 512, requires_grad=True, device=device))
+            lambda_ge = nn.Parameter(torch.ones(config.data.batch_size, 512, requires_grad=True, device=device))
+            lambda_bb = lambda_bb.to(device=device, dtype=torch.float32)
+            lambda_ff = lambda_ff.to(device=device, dtype=torch.float32)
+            lambda_en = lambda_en.to(device=device, dtype=torch.float32)
+            lambda_ge = lambda_ge.to(device=device, dtype=torch.float32)
+            optimizer = _optimizer(config, clip_perceptor, ff_temp_trans, [lambda_bb, lambda_ff, lambda_en, lambda_ge])
+            lr_scheduler = _lr_scheduler(config, optimizer)
+        else:
+            lambda_bb = config.data.weights.lambda_bb
+            lambda_ff = config.data.weights.lambda_ff
+            lambda_en = config.data.weights.lambda_en
+            lambda_ge = config.data.weights.lambda_ge
+            optimizer = _optimizer(config, clip_perceptor, ff_temp_trans)
+            lr_scheduler = _lr_scheduler(config, optimizer)
+    else:
+        optimizer = _optimizer(config, clip_perceptor, ff_temp_trans)
+        lr_scheduler = _lr_scheduler(config, optimizer)
     
-    # one_hot = F.one_hot(torch.randint(n_toks, [1 * 1], device=device), n_toks).float()
-    # z = one_hot @ vqgan_weights
-    # z = z.view([-1, toksY, toksX, e_dim]).permute(0, 3, 1, 2)
-    # z = torch.rand_like(z)*2
-    # z_orig = z.clone()
-    # z.requires_grad_(True)
-    ##################################################
 
     ################### Train Classifier ####################################
     # scaler = torch.cuda.amp.GradScaler()
     for epoch in range(start_epoch, config.solver.epochs):
-        model_image.train()
-        model_text.train()
-        fusion_model.train()
-        
-        ###########################################################################
-        # x = rand_vqgan_weights.movedim(1, 3)
-        # codebook = vqgan_model.quantize.embedding.weight
-        
-        # # vector_quantize
-        # d = x.pow(2).sum(dim=-1, keepdim=True) + codebook.pow(2).sum(dim=1) - 2 * x @ codebook.T
-        # indices = d.argmin(-1)
-        # x_q = F.one_hot(indices, codebook.shape[0]).to(d.dtype) @ codebook
-        # rand_vqgan_weights_q = replace_grad(x_q, x).movedim(3, 1)
+        ff_image_clip.train()
+        ff_text_clip.train()
+        ff_temp_trans.train()
 
-        # # clamp the gradient between the minimum and maximum weights of the original
-        # out = clamp_with_grad(vqgan_model.decode(rand_vqgan_weights_q).add(1).div(2), 0, 1)
-        ###########################################################################
-
-        running_loss_all = 0
         running_kl = 0
-        running_ce = 0
-        running_total = 0
 
         for kkk,data in enumerate(tqdm(train_loader)):
             if config.solver.type != 'monitor':
@@ -164,131 +129,122 @@ def train_classifier(start_epoch,
                     lr_scheduler.step(epoch + kkk / len(train_loader))
             optimizer.zero_grad()
 
-            videos, orig_videos, generated_images, bbs, list_id = data
-            orig_videos = orig_videos.to(device)
+            bb_video, ff_video, generated_images, bbs, list_id = data
+            ff_video = ff_video.to(device)
             list_id = list_id.to(device)
             # generated_images = generated_images.to(device)
-            videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
+            bb_video = bb_video.view((-1,config.data.num_segments,3)+bb_video.size()[-2:])
             
-            b,t,c,h,w = videos.size()
+            b,t,c,h,w = bb_video.size()
             
-
-
             text_id = numpy.random.randint(num_text_aug,size=len(list_id))
 
             token_texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
             real_texts = [text_aug_dict[j][i] for i,j in zip(list_id,text_id)]
-            videos= videos.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
+            bb_video= bb_video.to(device).view(-1,c,h,w ) # omit the Image.fromarray if the images already in PIL format, change this line to images=list_image if using preprocess inside the dataset class
 
-            if test3:
+            if not config.data.florence.activate:
+                texts = token_texts.to(device)
+            elif config.data.florence.use_bounded_text:
                 with torch.no_grad():
-                    final_text, bounded_text = run_example(generated_images, processor, flo_model, real_texts, bbs=bbs)
+                    final_text, bounded_text = run_example(generated_images, flo_processor, flo_model, real_texts, config, bbs=bbs)
                     texts  = final_text.to(device)
                     bounded_texts = bounded_text.to(device)
-            elif florence_activate:
+            else:
                 with torch.no_grad():
-                    final_text = run_example(generated_images, processor, flo_model, real_texts)
+                    final_text = run_example(generated_images, flo_processor, flo_model, real_texts, config)
                     texts  = final_text.to(device)
-            else:
-                texts = token_texts.to(device)
 
+            # Process Video Embeddings for BB and Original (full frame)
+            bb_video_tensor = bb_video.view(-1,c,h,w )
+            bb_image_embedding = ff_image_clip(bb_video_tensor)
+            bb_image_embedding = bb_image_embedding.view(b,t,-1)
+            bb_image_embedding = ff_temp_trans(bb_image_embedding)
 
-
-            ############## Calculate explainability loss between attn and mask ###########
-            # run through the prompt model and get the new results from the prompts
-            if not config.data.use_orig:
-                loss_all, image_embedding, text_embedding = bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model)
-            else:
-                video_tensor = videos.view(-1,c,h,w )
-                image_embedding = model_image(video_tensor)
-                image_embedding = image_embedding.view(b,t,-1)
-                image_embedding = fusion_model(image_embedding)
-
-                if test3:
-                    text_embedding = model_text(bounded_text)
-                else:
-                    text_embedding = model_text(texts)
-
-                video_tensor = orig_videos.view(-1,c,h,w )
-                image_emb_orig = model_image(video_tensor)
-                image_emb_orig = image_emb_orig.view(b,t,-1)
-                image_emb_orig = fusion_model(image_emb_orig)
-
-                text_orig_embedding = model_text(texts)
+            ff_video_tensor = ff_video.view(-1,c,h,w )
+            ff_image_embedding = ff_image_clip(ff_video_tensor)
+            ff_image_embedding = ff_image_embedding.view(b,t,-1)
+            ff_image_embedding = ff_temp_trans(ff_image_embedding)
+            
+            # Process Text Embeddings
+            ff_gen_text_embedding = ff_text_clip(texts)
+            # if config.data.florence.use_bounded_text:
+            #     bb_text_embedding = ff_text_clip(bounded_text)
+            # else:
+            #     bb_text_embedding = ff_gen_text_embedding
+            generic_texts = token_texts.to(device)
+            set_text_embedding = ff_text_clip(generic_texts)
 
             if config.network.fix_text:
-                text_embedding.detach_()
-                text_orig_embedding.detach_()
+                ff_gen_text_embedding.detach_()
+                # bb_text_embedding.detach_()
 
-            logit_scale = perceptor.logit_scale.exp()
-            logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
-            if config.data.use_orig:
-                logits_per_image_orig, logits_per_text_orig = create_logits(image_emb_orig,text_orig_embedding,logit_scale)
-            
-            # if lambda_ce != 0:
-            #     text_inputs = classes.to(device)
-            #     text_features2 = perceptor.encode_text(text_inputs)
-            #     logits_per_image2 = (100.0 * image_embedding @ text_features2.T)
-            #     logits_per_image2_orig = (100.0 * image_emb_orig @ text_features2.T)
-            #     similarity = calculate_similarity(logits_per_image2, b, num_text_aug)
-            #     similarity_orig = calculate_similarity(logits_per_image2_orig, b, num_text_aug)
-            #     list_id = list_id.to(device)
-            #     ce_loss = cross_entropy(similarity+similarity_orig, list_id)
+            ground_truth = torch.tensor(gen_label(list_id),dtype=ff_image_embedding.dtype,device=device)
+            logit_scale = clip_perceptor.logit_scale.exp()
+            if config.data.weighted_features.use:
+                if config.data.weighted_features.learned:
+                    image_embedding = lambda_bb.to(dtype=bb_image_embedding.dtype)*bb_image_embedding       + lambda_ff.to(dtype=ff_image_embedding.dtype)*ff_image_embedding
+                    text_embedding  = lambda_en.to(dtype=ff_gen_text_embedding.dtype)*ff_gen_text_embedding + lambda_ge.to(dtype=set_text_embedding.dtype)*set_text_embedding
+                else:
+                    image_embedding = lambda_bb*bb_image_embedding    + lambda_ff*ff_image_embedding
+                    # Add here the generic and captioning
+                    text_embedding  = lambda_en*ff_gen_text_embedding + lambda_ge*set_text_embedding
+                
 
-            # parameter = nn.Parameter()
-            ground_truth = torch.tensor(gen_label(list_id),dtype=image_embedding.dtype,device=device)
-            loss_imgs = loss_img(logits_per_image,ground_truth)
-            loss_texts = loss_txt(logits_per_text,ground_truth)
-
-            if config.data.use_orig:
-                loss_imgs_orig = loss_img(logits_per_image_orig, ground_truth)
-                loss_texts_orig = loss_txt(logits_per_text_orig,ground_truth)
-
-                kl_loss = (loss_imgs + loss_texts)/2
-                kl_loss_orig = ((loss_imgs_orig + loss_texts_orig)/2)
-                kl_loss = config.data.lambda_cropped*kl_loss + config.data.lambda_orig*kl_loss_orig
+                logits_per_image, logits_per_text = create_logits(image_embedding,text_embedding,logit_scale)
+                
+                loss_imgs = loss_img(logits_per_image,ground_truth)
+                loss_texts = loss_txt(logits_per_text,ground_truth)
+                # loss_flo = outputs.loss
+                kl_loss = config.loss.image*loss_imgs + (1 - config.loss.image)*loss_texts #+ config.data.mu*loss_flo
+                wandb.log({"train_loss_imgs":  loss_imgs})
+                wandb.log({"train_loss_texts": loss_texts})
             else:
-                kl_loss = (loss_imgs + loss_texts)/2
-            total_loss = kl_loss
-            running_kl += kl_loss.item()
-            if lambda_bb > 0:
-                total_loss += lambda_bb*loss_all
-                running_loss_all += loss_all.item()
-            if lambda_ce > 0:
-                total_loss += lambda_ce*ce_loss
-                running_ce += ce_loss.item()
-            running_total += total_loss.item()
+                bb_logits_per_image, bb_logits_per_text = create_logits(bb_image_embedding,bb_text_embedding,logit_scale)
+                ff_logits_per_image, ff_logits_per_text = create_logits(ff_image_embedding,ff_text_embedding,logit_scale)
+            
+                ff_loss_imgs = loss_img(ff_logits_per_image,ground_truth)
+                ff_loss_texts = loss_txt(ff_logits_per_text,ground_truth)
+                ff_kl_loss = (ff_loss_imgs + ff_loss_texts)/2
 
-            wandb.log({"train_total_loss": total_loss})
-            wandb.log({"train_loss_imgs": loss_imgs})
-            wandb.log({"train_loss_texts": loss_texts})
+                bb_loss_imgs = loss_img(bb_logits_per_image, ground_truth)
+                bb_loss_texts = loss_txt(bb_logits_per_text,ground_truth)
+                bb_kl_loss = (bb_loss_imgs + bb_loss_texts)/2
+
+                kl_loss = config.data.weights.lambda_bb*bb_kl_loss + config.data.weights.lambda_ff*ff_kl_loss
+                wandb.log({"train_ff_loss_imgs":  ff_loss_imgs})
+                wandb.log({"train_ff_loss_texts": ff_loss_texts})
+                wandb.log({"train_bb_loss_imgs":  bb_loss_imgs})
+                wandb.log({"train_bb_loss_texts": bb_loss_texts})
+
+            running_kl += kl_loss.item()
+
             wandb.log({"lr": optimizer.param_groups[0]['lr']})
-            total_loss.backward()
-            # print(f'Iter {kkk}: {total_loss.item()}')
+            kl_loss.backward()
 
             if device == "cpu":
                 optimizer.step()
                 # optimizer.step()
             else:
-                convert_models_to_fp32(perceptor)
+                convert_models_to_fp32(clip_perceptor)
                 optimizer.step()
                 # optimizer.step()
-                clip.model.convert_weights(perceptor)
+                clip.model.convert_weights(clip_perceptor)
 
             # scaler.update()
 
         if epoch % config.logging.eval_freq == 0:  # and epoch>0
-            prec1 = validate(epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug, processor, flo_model, text_aug_dict)
+            prec1 = validate(epoch,val_loader, classes, class_text, device, clip_perceptor,ff_temp_trans, config,num_text_aug, flo_processor, flo_model, text_aug_dict, lambda_bb, lambda_ff)
 
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
-        print(f'Testing: {prec1}/{best_prec1}, Avg Loss KL: {running_kl/len(train_loader)}, Avg Loss All: {running_loss_all/len(train_loader)}, Avg CE Loss: {running_ce/len(train_loader)}, Avg TOTAL: {running_total/len(train_loader)}')
+        print(f'Testing: {prec1}/{best_prec1}, Avg Loss KL: {running_kl/len(train_loader)}')
         print('Saving:')
         filename = "{}/last_model.pt".format(working_dir)
 
-        epoch_saving(epoch, perceptor, fusion_model, optimizer, filename)
+        epoch_saving(epoch, clip_perceptor, ff_temp_trans, optimizer, filename)
         if is_best:
-            best_saving(working_dir, epoch, perceptor, fusion_model, optimizer)
+            best_saving(working_dir, epoch, clip_perceptor, ff_temp_trans, optimizer)
 
 def main():
     global args, best_prec1
@@ -352,14 +308,9 @@ def main():
     if config.data.randaug.N > 0:
         transform_train = randAugment(transform_train, config)
 
-
-    # print('train transforms: {}'.format(transform_train.transforms))
-    # print('val transforms: {}'.format(transform_val.transforms))
-
     fusion_model = visual_prompt(config.network.sim_header,clip_state_dict,config.data.num_segments)
     model_text = TextCLIP(perceptor)
     model_image = ImageCLIP(perceptor)
-    # model_stan = stanet_af(layers=[2, 2, 2, 2], in_channels=2, num_classes=embed_dim, k=2, features=16)
     model_text = torch.nn.DataParallel(model_text).cuda()
     model_image = torch.nn.DataParallel(model_image).cuda()
     fusion_model = torch.nn.DataParallel(fusion_model).cuda()
@@ -367,100 +318,48 @@ def main():
     wandb.watch(perceptor)
     wandb.watch(fusion_model)
 
-    mask_transform = get_mask_augmentation(cut_size=224, 
-                                        cutn=1, 
-                                        cut_pow=1., 
-                                        noise_fac = 0.1)
-    if not config.data.use_orig:
-        def collate_fn(batch):
-            videos, masks, lambda_val, labels = zip(*batch)
-            # Check the labels for bb
-            videos, labels = torch.stack(videos), torch.tensor(labels)
-            lambda_val = torch.tensor(lambda_val)
-            masks = torch.stack(masks, dim=0)
-            # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
-            masks = masks.squeeze(dim=1)
-            videos = videos.squeeze(dim=1)
-            data = {'videos': videos, 'masks': masks}
-            iii, aug_masks = mask_transform(data)
-            # iii = iii.squeeze()
-            return videos, aug_masks, lambda_val, labels
+    def collate_fn(batch):
+        cropped_videos, images, bbs, generated_images, labels = zip(*batch)
+        # Check the labels for bb
+        cropped_videos = torch.stack(cropped_videos) 
+        images = torch.stack(images) 
+        labels = torch.tensor(labels)
+        generated_images = torch.stack(generated_images)
+        bbs = torch.stack(bbs)
+        return cropped_videos, images, generated_images, bbs, labels
 
-        train_data = Action_DATASETS(
-                        config.data.train_list,
-                        config.data.label_list,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        random_shift=config.data.random_shift,
-                        image_transform=transform_train)
-        train_loader = DataLoader(
-                        train_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=True,
-                        pin_memory=True,
-                        drop_last=True, 
-                        collate_fn=collate_fn)
-        val_data = Action_DATASETS(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        image_transform=transform_val)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=True,
-                        drop_last=True,
-                        collate_fn=collate_fn)
-    else:
-
-        def collate_fn(batch):
-            cropped_videos, images, bbs, generated_images, labels = zip(*batch)
-            # Check the labels for bb
-            cropped_videos = torch.stack(cropped_videos) 
-            images = torch.stack(images) 
-            labels = torch.tensor(labels)
-            generated_images = torch.stack(generated_images)
-            bbs = torch.stack(bbs)
-            return cropped_videos, images, generated_images, bbs, labels
-
-        train_data = Action_DATASETS_orig(
-                        config.data.train_list,
-                        config.data.label_list,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        random_shift=config.data.random_shift,
-                        transform=transform_train,
-                        label_box=config.data.label_box)
-        train_loader = DataLoader(
-                        train_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=True,
-                        pin_memory=False,
-                        drop_last=True, 
-                        collate_fn=collate_fn)
-        val_data = Action_DATASETS_orig(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        transform=transform_val,
-                        label_box=config.data.label_box)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=False,
-                        drop_last=True,
-                        collate_fn=collate_fn)
+    train_data = EducationBBDataset(
+                    config.data.train_list,
+                    config.data.label_list,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    random_shift=config.data.random_shift,
+                    transform=transform_train,
+                    label_box=config.data.label_box)
+    train_loader = DataLoader(
+                    train_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=True,
+                    pin_memory=False,
+                    drop_last=True, 
+                    collate_fn=collate_fn)
+    val_data = EducationBBDataset(
+                    config.data.val_list,
+                    config.data.label_list, 
+                    random_shift=False,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    transform=transform_val,
+                    label_box=config.data.label_box)
+    val_loader = DataLoader(
+                    val_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=False,
+                    pin_memory=False,
+                    drop_last=True,
+                    collate_fn=collate_fn)
 
 
     if device == "cpu":
@@ -498,56 +397,45 @@ def main():
         else:
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
-    classes, num_text_aug, text_dict, text_aug_dict = text_prompt(train_data, file_name=config.prompt)
+    classes, num_text_aug, text_dict, text_aug_dict, class_text = text_prompt(train_data, file_name=config.prompt)
 
     replace_grad = ReplaceGrad.apply
-    # 1. Compile a proper list of the classes with label numbers
-    # 3. Create a replace_grad
-    
-    # 2. Find what the perceptor is for me
-    # label_dict = {idx:class_name for idx, class_name in enumerate(train_data.classes)}
-    if config.data.lambda_bb > 0:
-        criterion_list = create_prompt_loss_dict(train_data.classes, perceptor, replace_grad, device)
-    else:
-        criterion_list = []
 
     best_prec1 = 0.0
     if config.solver.evaluate:
-        prec1 = validate(start_epoch,val_loader, classes, device, perceptor,fusion_model, config,num_text_aug, processor, flo_model)
+        prec1 = validate(start_epoch,val_loader, classes, class_text, device, perceptor,fusion_model, config,num_text_aug, processor, flo_model, 1, 1)
         return
 
-    # for k,v in model.named_parameters():
-    #     print('{}: {}'.format(k, v.requires_grad))
-
-    optimizer = _optimizer(config, perceptor, fusion_model)
-    lr_scheduler = _lr_scheduler(config, optimizer)
-
-    promptCrit = pl2(perceptor, replace_grad, im_emb_type=config.data.im_emb_type).to(device)
-
-    train_classifier(start_epoch = start_epoch, 
-                     loss_img = loss_img,
-                     loss_txt = loss_txt,
-                     criterion_list = criterion_list,
-                     promptCrit = promptCrit,
-                     lr_scheduler = lr_scheduler,
-                     config = config, 
-                     text_dict = text_dict,
-                     text_aug_dict = text_aug_dict,
-                     model_image = model_image, 
-                     model_text = model_text, 
-                     fusion_model = fusion_model, 
-                     train_loader = train_loader, 
-                     val_loader = val_loader, 
-                     optimizer = optimizer, 
-                     num_text_aug = num_text_aug,
-                     classes = classes,
-                     perceptor = perceptor,
-                     working_dir = working_dir,
-                     device = device,
-                     lambda_bb=config.data.lambda_bb,
-                     lambda_ce=config.data.lambda_ce,
-                     processor= processor, 
-                     flo_model = flo_model)
+    train_classifier(
+            # Models
+            ff_image_clip = model_image, 
+            ff_text_clip = model_text, 
+            ff_temp_trans = fusion_model,
+            flo_processor= processor, 
+            flo_model = flo_model, 
+            clip_perceptor = perceptor,
+            
+            # loss functions
+            loss_img = loss_img,
+            loss_txt = loss_txt,
+            
+            # Data loaders
+            train_loader = train_loader, 
+            val_loader = val_loader, 
+            
+            # Miscelaneous
+            start_epoch = start_epoch,
+            device = device, 
+            config = config,
+            working_dir = working_dir,
+            
+            # Tokenized Text
+            text_dict = text_dict,
+            text_aug_dict = text_aug_dict,
+            num_text_aug = num_text_aug,
+            classes = classes,
+            class_text = class_text
+    )
 
 
 if __name__ == '__main__':

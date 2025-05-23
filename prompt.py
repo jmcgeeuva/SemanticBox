@@ -76,22 +76,6 @@ from helpers import ReplaceGrad
 
 from helpers import *
 
-class TextCLIP(nn.Module):
-    def __init__(self, model) :
-        super(TextCLIP, self).__init__()
-        self.model = model
-
-    def forward(self,text):
-        return self.model.encode_text(text)
-
-class ImageCLIP(nn.Module):
-    def __init__(self, model) :
-        super(ImageCLIP, self).__init__()
-        self.model = model
-
-    def forward(self,image):
-        return self.model.encode_image(image)
-
 class PromptLoss(nn.Module):
     def __init__(self, text, perceptor, replace_grad):
         super().__init__()
@@ -319,3 +303,49 @@ class PromptLoss2(nn.Module):
             image_embedding = image_embedding.view(8, 2, 512).mean(dim=1)
         
         return final_loss, text_embedding, image_embedding
+
+# def create_prompt_loss_dict(label_names, perceptor, replace_grad, device):
+#     # keys = sorted(list(label_names.keys()))
+#     res = {}
+#     for label_num, label_name in label_names:
+#         prompt = f'Video of a teacher {" ".join(label_name.split("_"))}'
+#         res[label_num] = PromptLoss(prompt, perceptor, replace_grad).to(device)
+#     return res
+    
+# def bounding_box_loss(criterion_list, b, t, c, h, w, list_id, aug_masks, lambdas, texts, promptCrit, fusion_model):
+#     lossAll = []
+#     # per_frame = False
+#     loop_list = True
+#     text_list = []
+#     image_list = []
+#     if len(criterion_list) > 0:
+#         # for each label in the list and for each invidividual video (there are 16 of them)
+#         if loop_list:
+#             videos = videos.reshape(b,t,c,h,w)
+#             for idx, label in enumerate(list_id.detach().cpu()):
+#                 # find the loss for this specific bounding box
+#                 prompt_idx = int(label)
+#                 crit = criterion_list[prompt_idx]
+#                 curr_image = videos[idx]
+#                 curr_mask = aug_masks[idx]
+#                 curr_lambda = lambdas[idx]
+#                 token = texts[idx]
+    
+#                 res, text_embedding, image_embedding = promptCrit(curr_image, curr_mask, curr_lambda, token)
+#                 image_list.append(image_embedding)
+    
+#                 text_list.append(text_embedding[0])
+#                 lossAll.append(res)
+#             loss_all = (sum(lossAll)/len(lossAll))
+#             text_embedding = torch.stack(text_list)
+#             image_embedding = torch.stack(image_list)
+#             image_embedding = image_embedding.view(b,t,-1)
+#             image_embedding = fusion_model(image_embedding)
+#             # print(sum(lossAll), len(lossAll))
+#         # else:
+#         #     # give the loss function the current text to unify the two
+#         #     videos = videos.reshape(b,t,c,h,w)
+#         #     print(videos.shape, aug_masks.shape, lambdas.shape, texts.shape)
+#         #     loss_all = promptCrit(videos, aug_masks, lambdas, texts)
+#         #     raise ValueError("test")
+#     return loss_all, image_embedding, text_embedding

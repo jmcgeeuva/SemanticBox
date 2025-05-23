@@ -1,16 +1,17 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess-sitting
-#SBATCH --time=0-01:00:00
+#SBATCH --time=0-02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=20 # number of cores/processors
 #SBATCH --mem=50G
-#SBATCH --partition=standard
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 #SBATCH -A eng_viva
 #SBATCH --mail-type=begin,end
 #SBATCH --mail-user=tkg5kq@virginia.edu
-#SBATCH -a 1-81%81
+#SBATCH -a 52,80%2
 
 LOG_DIR="logs"
 if [ ! -d "$LOG_DIR" ]; then

@@ -25,11 +25,6 @@ data:
     label_list: './splits/split_reduced/education_6_labels.csv'
     index_bias: 1
     input_size: 224
-    florence:
-        activate: True
-        use_bounded_text: False
-        random_frame: False
-        generated_test: True
     randaug:
         N: 2 #2
         M: 9  #9
@@ -43,7 +38,7 @@ data:
         lambda_bb: .5
         # Text weight
         lambda_en: 1
-        lambda_ge: 0
+        # lambda_ge: 1
         # Florence weight
         mu: 0
     label_box: False # if False use teacher

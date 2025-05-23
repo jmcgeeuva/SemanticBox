@@ -127,7 +127,8 @@ def get_caption(image, flo_model, processor, device, level=0):
     caption, cap_key = run_task(flo_model, processor, image, task, device)
     return caption[cap_key]
 
-def main(class_name, vid_num, device):
+def main(class_name, vid_num, vid_list, device):
+
     flo_model, processor = flor2.load("BASE_FT", device)
 
     base_dir = os.path.join('./', 'frames')
@@ -136,12 +137,27 @@ def main(class_name, vid_num, device):
     sorted_list = sorted(os.listdir(class_dir))
     if vid_num > len(sorted_list):
         return 0
-    if vid_num > 0:
+    if vid_list != None:
+        tmp_sorted_list = vid_list.split(',')
+        sorted_list = []
+        for element in tmp_sorted_list:
+            if '-' in element:
+                range_start = int(element.split('-')[0])
+                range_end = int(element.split('-')[1])
+                for i in range(range_start, range_end):
+                    sorted_list.append(f'{i:04d}')
+            else:
+                sorted_list.append(f'{int(element):04d}')
+    elif vid_num > 0:
         sorted_list = [f'{vid_num:04d}']
 
     for vid in sorted_list:
         vid_path = os.path.join(class_dir, vid)
-        with open(os.path.join(vid_path, 'annotation.json'), 'r') as f:
+        ann_path = os.path.join(vid_path, 'annotation.json')
+        if not os.path.exists(ann_path):
+            print(f"Error: path {ann_path} does not exist")
+            continue
+        with open(ann_path, 'r') as f:
             json_dict = json.load(f)
         new_json_dict = copy.deepcopy(json_dict)
         sorted_frame_list = sorted(json_dict["frames"].keys())
@@ -163,6 +179,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('class_name')
     parser.add_argument('--vid_num', default=-1, type=int)
+    parser.add_argument('--vid_list', default=None, type=str)
     parser.add_argument('--device', default='cpu', type=str)
     args = parser.parse_args()
-    main(args.class_name, args.vid_num, args.device)
+
+    if args.vid_num != -1 and args.vid_list != None:
+        print('ERROR: vid num and vid list cannot be set at the same time')
+
+
+    main(args.class_name, args.vid_num, args.vid_list, args.device)
