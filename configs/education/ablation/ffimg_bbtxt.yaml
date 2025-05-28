@@ -4,9 +4,6 @@ test_name: generic_test
 seed: 1737328734
 prompt: './prompts/generic_prompts.txt'
 use_calc_norm: False
-just:
-    image: False
-    text: False
 loss:
     image: .5
     text: .5
@@ -17,6 +14,8 @@ data:
     seg_length: 1
     batch_size: 32
     workers: 16
+    loss_type: 0
+    k: 2
     num_classes: 6
     image_tmpl: '{:04d}.jpg'
     # train_list: './splits/split_reduced/trainnewsplit01.txt'
@@ -28,9 +27,10 @@ data:
     input_size: 224
     florence:
         activate: True
-        use_bounded_text: False
+        use_bounded_text: True
         random_frame: False
         generated_test: False
+        caption_type: CAPTION
     randaug:
         N: 2 #2
         M: 9  #9
@@ -41,10 +41,10 @@ data:
     weights:
         # Image weight
         lambda_ff: 1
-        lambda_bb: .5
+        lambda_bb: 0
         # Text weight
-        lambda_enff: 1
-        lambda_enbb: 0
+        lambda_enff: 0
+        lambda_enbb: 1
         # Florence weight
         mu: 0
         gamma: 0

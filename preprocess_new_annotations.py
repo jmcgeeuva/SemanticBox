@@ -127,7 +127,7 @@ def get_caption(image, flo_model, processor, device, level=0):
     caption, cap_key = run_task(flo_model, processor, image, task, device)
     return caption[cap_key]
 
-def main(class_name, vid_num, vid_list, device):
+def main(class_name, vid_num, vid_list, device, threshold, freq):
 
     flo_model, processor = flor2.load("BASE_FT", device)
 
@@ -143,7 +143,7 @@ def main(class_name, vid_num, vid_list, device):
         for element in tmp_sorted_list:
             if '-' in element:
                 range_start = int(element.split('-')[0])
-                range_end = int(element.split('-')[1])
+                range_end = int(element.split('-')[1])+1
                 for i in range(range_start, range_end):
                     sorted_list.append(f'{i:04d}')
             else:
@@ -157,19 +157,50 @@ def main(class_name, vid_num, vid_list, device):
         if not os.path.exists(ann_path):
             print(f"Error: path {ann_path} does not exist")
             continue
+        new_ann_path = os.path.join(vid_path, 'new_annotation.json')
+        if os.path.exists(ann_path):
+            print(f"Error: path {new_ann_path} exists")
+            with open(new_ann_path, 'r') as f:
+                json_dict = json.load(f)
+            try:
+                # cheap way of saying "if it exists in the dict skip"
+                t = json_dict["frames"]["1"]["caption"]
+                continue
+            except:
+                pass
         with open(ann_path, 'r') as f:
             json_dict = json.load(f)
         new_json_dict = copy.deepcopy(json_dict)
         sorted_frame_list = sorted(json_dict["frames"].keys())
+        skip = False
+        if len(sorted_frame_list) > threshold:
+            skip = True
+        cnt = 0
+        last_caption = ''
+        last_detailed=''
+        last_more = ''
+        last_bb = []
         for frame in tqdm(sorted_frame_list, total=len(sorted_frame_list)):
-            teacher_bb = json_dict['frames'][frame]["teacher_box"]
-            image = Image.open(os.path.join(vid_path, f'{int(frame):04d}.jpg'))
-            new_bb, best_key, iou_score = test(image, teacher_bb, flo_model, processor, device)
-            new_json_dict['frames'][frame]["teacher_box"] = new_bb
-            new_json_dict['frames'][frame]["caption"] = {}
-            new_json_dict['frames'][frame]["caption"][0] = get_caption(image, flo_model, processor, device, level=0)
-            new_json_dict['frames'][frame]["caption"][1] = get_caption(image, flo_model, processor, device, level=1)
-            new_json_dict['frames'][frame]["caption"][2] = get_caption(image, flo_model, processor, device, level=2)
+            if skip and cnt % freq != 0 and cnt != 0:
+                new_json_dict['frames'][frame]["teacher_box"]  = last_bb
+                new_json_dict['frames'][frame]["caption"] = {}
+                new_json_dict['frames'][frame]["caption"][0] = last_caption
+                new_json_dict['frames'][frame]["caption"][1] = last_detailed
+                new_json_dict['frames'][frame]["caption"][2] = last_more
+            else:
+                teacher_bb = json_dict['frames'][frame]["teacher_box"]
+                image = Image.open(os.path.join(vid_path, f'{int(frame):04d}.jpg'))
+                new_bb, best_key, iou_score = test(image, teacher_bb, flo_model, processor, device)
+                last_bb = new_bb
+                new_json_dict['frames'][frame]["teacher_box"]  = last_bb
+                new_json_dict['frames'][frame]["caption"] = {}
+                last_caption = get_caption(image, flo_model, processor, device, level=0)
+                last_detailed = get_caption(image, flo_model, processor, device, level=1)
+                last_more = get_caption(image, flo_model, processor, device, level=2)
+                new_json_dict['frames'][frame]["caption"][0] = last_caption
+                new_json_dict['frames'][frame]["caption"][1] = last_detailed
+                new_json_dict['frames'][frame]["caption"][2] = last_more
+            cnt += 1
 
         new_ann_path = os.path.join(vid_path, 'new_annotation.json')
         with open(new_ann_path, 'w') as f:
@@ -180,11 +211,13 @@ if __name__ == '__main__':
     parser.add_argument('class_name')
     parser.add_argument('--vid_num', default=-1, type=int)
     parser.add_argument('--vid_list', default=None, type=str)
-    parser.add_argument('--device', default='cpu', type=str)
+    parser.add_argument('--device', default='cuda:0', type=str)
+    parser.add_argument('--threshold', default=50, type=int)
+    parser.add_argument('--freq', default=240, type=int)
     args = parser.parse_args()
 
     if args.vid_num != -1 and args.vid_list != None:
         print('ERROR: vid num and vid list cannot be set at the same time')
 
 
-    main(args.class_name, args.vid_num, args.vid_list, args.device)
+    main(args.class_name, args.vid_num, args.vid_list, args.device, args.threshold, args.freq)

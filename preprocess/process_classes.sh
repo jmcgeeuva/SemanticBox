@@ -4,7 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=20 # number of cores/processors
 #SBATCH --mem=50G
-#SBATCH --partition=standard
+#SBATCH --partition=gpu
+#SBATCH
 #SBATCH --output=/dev/null
 #SBATCH --error=/dev/null
 #SBATCH -A eng_viva

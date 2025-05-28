@@ -2254,7 +2254,7 @@ def available_models() -> List[str]:
     """Returns the names of available CLIP models"""
     return list(_MODELS.keys())
     
-def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu"):
+def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", lora: bool = True):
     """Load the Florence Model
 
     Parameters
@@ -2273,7 +2273,7 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
     processor = Florence2Processor.from_pretrained(model_path, trust_remote_code=True, device_map='auto', revision='refs/pr/6')
     state_dict = auto_model.state_dict()
 
-    lora = True
+    
     if lora:
         config = LoraConfig(
             r=8,
@@ -2291,7 +2291,7 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
         )
 
         model = get_peft_model(auto_model, config)
-        model = model.to(device)
+        # model = model.to(device)
     else:
 
         config = auto_model.config

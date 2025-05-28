@@ -7,7 +7,7 @@ import os
 import os.path
 import numpy as np
 from numpy.random import randint
-import pdb
+# import pdb
 import io
 import time
 import pandas as pd
@@ -322,7 +322,7 @@ class EducationBBDataset(data.Dataset):
                  image_tmpl='img_{:05d}.jpg', transform=None,
                  random_shift=True, test_mode=False, index_bias=1, 
                  height=224, width=224, label_box=False, debug=False,
-                 bounding_boxes=True):
+                 bounding_boxes=True,caption_level=0):
 
         self.list_file = list_file
         self.num_segments = num_segments
@@ -339,6 +339,7 @@ class EducationBBDataset(data.Dataset):
         self.label_box = label_box
         self.debug = debug
         self.bounding_boxes = bounding_boxes
+        self.caption_level = caption_level
 
         if self.index_bias is None:
             if self.image_tmpl == "frame{:d}.jpg":
@@ -360,6 +361,9 @@ class EducationBBDataset(data.Dataset):
             box = torch.tensor(annotation['frames'][str(idx)]['label_box'])
 
         return box
+    
+    def _load_caption(self, annotation, idx, level=0):
+        return annotation['frames'][str(idx)]['caption'][str(level)]
 
     def create_masks(self, mask_indices, height, width, channels=3):
         if width < self.model_resolution:
@@ -462,21 +466,28 @@ class EducationBBDataset(data.Dataset):
     def get(self, record, indices):
         images = list()
         bbs = list()
+        captions = list()
         
         with open(os.path.join(record.path, 'annotation.json')) as f:
-            annotation = json.load(f, object_pairs_hook=OrderedDict)
+            bb_annotation = json.load(f, object_pairs_hook=OrderedDict)
+        with open(os.path.join(record.path, 'new_annotation.json')) as f:
+            txt_annotation = json.load(f, object_pairs_hook=OrderedDict)
 
         for i, seg_ind in enumerate(indices):
             p = int(seg_ind)
             try:
                 seg_imgs = self._load_image(record.path, p)
-                bb = self._load_teacher_box(annotation, p)
+                bb = self._load_teacher_box(bb_annotation, p)
+                # caption = self._load_caption(txt_annotation, p, level=self.caption_level)
             except OSError:
                 print('ERROR: Could not read image "{}"'.format(record.path))
                 print('invalid indices: {}'.format(indices))
                 raise
+            except:
+                raise ValueError(record.path)
             images.extend(seg_imgs)
             bbs.append(bb)
+            # captions.append(caption)
 
         cropped_images = []
         for i, (x0, y0, x1, y1) in enumerate(bbs):
@@ -497,12 +508,14 @@ class EducationBBDataset(data.Dataset):
         data = self.transform(data)
         aug_images, image_masks = data['video'], data['mask']
 
-        generated_images = [transforms.ToTensor()(image) for image in images]
-        generated_images = torch.stack(generated_images)
+        nonaug_images = [transforms.ToTensor()(image) for image in images]
+        nonaug_images = torch.stack(nonaug_images)
         
         bbs = torch.stack(bbs)
 
-        return process_data, aug_images, bbs, generated_images, record.label
+        # ff_caption = random.choice(captions)
+
+        return process_data, aug_images, bbs, nonaug_images, None, record.label
 
     def __len__(self):
         return len(self.video_list)

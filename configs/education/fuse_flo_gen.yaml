@@ -1,4 +1,4 @@
-resume:
+resume: #/sfs/weka/scratch/tkg5kq/sandbox/BoundedCLIP/exp/clip_k400/ViT-B/32/education6/20250317_133011/last_model.pt
 pretrain: 
 test_name: generic_test
 seed: 1737328734
@@ -9,7 +9,6 @@ just:
     text: False
 loss:
     image: .5
-    text: .5
 data:
     dataset: education6
     modality: RGB
@@ -30,7 +29,7 @@ data:
         activate: True
         use_bounded_text: False
         random_frame: False
-        generated_test: False
+        generated_test: True
     randaug:
         N: 2 #2
         M: 9  #9
@@ -40,14 +39,13 @@ data:
         learned: False
     weights:
         # Image weight
-        lambda_ff: 1
+        lambda_ff: .5
         lambda_bb: .5
         # Text weight
-        lambda_enff: 1
-        lambda_enbb: 0
+        lambda_en: .5
+        lambda_ge: .5
         # Florence weight
         mu: 0
-        gamma: 0
     label_box: False # if False use teacher
 network:
     arch: ViT-B/32  #ViT-B/32 ViT-B/16

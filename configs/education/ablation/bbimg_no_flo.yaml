@@ -4,9 +4,6 @@ test_name: generic_test
 seed: 1737328734
 prompt: './prompts/generic_prompts.txt'
 use_calc_norm: False
-just:
-    image: False
-    text: False
 loss:
     image: .5
     text: .5
@@ -27,7 +24,7 @@ data:
     index_bias: 1
     input_size: 224
     florence:
-        activate: True
+        activate: False
         use_bounded_text: False
         random_frame: False
         generated_test: False
@@ -40,8 +37,8 @@ data:
         learned: False
     weights:
         # Image weight
-        lambda_ff: 1
-        lambda_bb: .5
+        lambda_ff: 0
+        lambda_bb: 1
         # Text weight
         lambda_enff: 1
         lambda_enbb: 0

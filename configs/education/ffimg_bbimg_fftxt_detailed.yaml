@@ -4,9 +4,6 @@ test_name: generic_test
 seed: 1737328734
 prompt: './prompts/generic_prompts.txt'
 use_calc_norm: False
-just:
-    image: False
-    text: False
 loss:
     image: .5
     text: .5
@@ -31,6 +28,7 @@ data:
         use_bounded_text: False
         random_frame: False
         generated_test: False
+        caption_type: DETAILED_CAPTION
     randaug:
         N: 2 #2
         M: 9  #9
@@ -40,7 +38,7 @@ data:
         learned: False
     weights:
         # Image weight
-        lambda_ff: 1
+        lambda_ff: .5
         lambda_bb: .5
         # Text weight
         lambda_enff: 1
