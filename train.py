@@ -178,33 +178,8 @@ def train_classifier(
                     #     final_text = concat_and_tokenize(ff_caption, real_texts =real_texts, testing=True)
                     texts  = final_text.to(device)
 
-            # if config.data.weights.mu > 0:
-            #     cropped_images = [transforms.ToPILImage()(images[0]) for images in generated_images]
-
-            #     inputs = flo_processor(
-            #                         text=list(['<REGION_TO_DESCRIPTION>']*len(list_id)), 
-            #                         images=cropped_images, 
-            #                         return_tensors="pt", 
-            #                         padding=True
-            #                     ).to(device)
-            #     input_ids = inputs["input_ids"]
-            #     pixel_values = inputs["pixel_values"]
-            #     labels = flo_processor.tokenizer(
-            #         text=real_texts,
-            #         return_tensors="pt",
-            #         padding=True,
-            #         return_token_type_ids=False
-            #     ).input_ids.to(device)
-            #     flo_outputs = flo_model(input_ids=input_ids, pixel_values=pixel_values, labels=labels)
-
-
             ground_truth = torch.tensor(gen_label(list_id),device=device) 
             logit_scale = clip_perceptor.logit_scale.exp()
-            # if config.data.weighted_features.use:
-            # if config.data.weighted_features.learned:
-            #     image_embedding = lambda_bb.to(dtype=bb_image_embedding.dtype)*bb_image_embedding       + lambda_ff.to(dtype=ff_image_embedding.dtype)*ff_image_embedding
-            #     text_embedding  = lambda_enff.to(dtype=ff_gen_text_embedding.dtype)*ff_gen_text_embedding + lambda_enbb.to(dtype=set_text_embedding.dtype)*set_text_embedding
-            # else:
             use_generic = False
             if config.data.loss_type == 0:
 
@@ -495,31 +470,10 @@ def train_classifier(
 
                 wandb.log({"train_loss_imgs":  loss_imgs})
                 wandb.log({"train_loss_texts": loss_texts})
-            # else:
-            #     bb_logits_per_image, bb_logits_per_text = create_logits(bb_image_embedding,bb_text_embedding,logit_scale)
-            #     ff_logits_per_image, ff_logits_per_text = create_logits(ff_image_embedding,ff_text_embedding,logit_scale)
-            
-            #     ff_loss_imgs = loss_img(ff_logits_per_image,ground_truth)
-            #     ff_loss_texts = loss_txt(ff_logits_per_text,ground_truth)
-            #     ff_kl_loss = (ff_loss_imgs + ff_loss_texts)/2
-
-            #     bb_loss_imgs = loss_img(bb_logits_per_image, ground_truth)
-            #     bb_loss_texts = loss_txt(bb_logits_per_text,ground_truth)
-            #     bb_kl_loss = (bb_loss_imgs + bb_loss_texts)/2
-
-            #     kl_loss = config.data.weights.lambda_bb*bb_kl_loss + config.data.weights.lambda_ff*ff_kl_loss
-            #     wandb.log({"train_ff_loss_imgs":  ff_loss_imgs})
-            #     wandb.log({"train_ff_loss_texts": ff_loss_texts})
-            #     wandb.log({"train_bb_loss_imgs":  bb_loss_imgs})
-            #     wandb.log({"train_bb_loss_texts": bb_loss_texts})
                 
 
             total_loss = kl_loss 
             running_kl += kl_loss.item()
-            # if config.data.weights.mu > 0:
-            #     # print(flo_outputs.loss, type(flo_outputs.loss), )
-            #     total_loss += torch.sum(flo_outputs.loss)
-            #     running_flo += torch.sum(flo_outputs.loss).item()
             if config.data.weights.gamma > 0:
                 total_loss += config.data.weights.gamma*loss_ce.item()
                 running_ce += ce_loss.item()
@@ -529,11 +483,9 @@ def train_classifier(
 
             if device == "cpu":
                 optimizer.step()
-                # optimizer.step()
             else:
                 convert_models_to_fp32(clip_perceptor)
                 optimizer.step()
-                # optimizer.step()
                 clip.model.convert_weights(clip_perceptor)
 
             # scaler.update()
@@ -728,8 +680,6 @@ def main():
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
     classes, num_text_aug, text_dict, text_aug_dict, class_text = text_prompt(train_data, file_name=config.prompt)
-
-    replace_grad = ReplaceGrad.apply
 
     best_prec1 = 0.0
     if config.solver.evaluate:

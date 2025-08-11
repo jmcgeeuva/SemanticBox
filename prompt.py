@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 import glob
 import matplotlib.pyplot as plt
-from captum.attr import visualization
+# from captum.attr import visualization
 from torchvision import transforms
 from argparse import Namespace
 import torch

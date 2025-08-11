@@ -251,6 +251,8 @@ def run_caption_florence(aug_images, model, processor, real_texts, config, testi
         CAPTION = 'DETAILED_CAPTION'
     elif config.data.florence.caption_level == 2:
         CAPTION = 'MORE_DETAILED_CAPTION'
+    else:
+        raise ValueError(f'{config.data.florence.caption_level} is an invalid caption_level in the configuration file')
     prompt_cap = [f'<{CAPTION}>' for _ in ff_images]
     generated_text = call_florence(prompt_cap, ff_images, model, processor)
     return concat_and_tokenize(generated_text, real_texts=real_texts, testing=testing, with_prompt=with_prompt)

@@ -13,7 +13,7 @@ data:
     num_segments: 8
     seg_length: 1
     batch_size: 32
-    workers: 16
+    workers: 12
     num_classes: 6
     loss_type: 0
     k: 2
@@ -58,7 +58,6 @@ network:
     type: clip_k400
     sim_header: "Transf"  #Transf   meanP  LSTM Conv_1D Transf_cls
     joint: False
-    describe:
 solver:
     type: cosine
     epochs: 50
