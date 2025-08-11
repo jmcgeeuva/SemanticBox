@@ -3,7 +3,7 @@
 # Mengmeng Wang, Jiazheng Xing, Yong Liu
 
 import os
-import clip
+import sys
 import torch.nn as nn
 from datasets import Action_DATASETS
 from torch.utils.data import DataLoader
@@ -21,6 +21,18 @@ from utils.Augmentation import get_augmentation
 import torch
 from utils.Text_Prompt import *
 
+from sklearn.metrics import confusion_matrix
+from sklearn.utils.multiclass import unique_labels
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
+from torchvision import transforms
+# from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
+import os
+import random
+import math
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 class TextCLIP(nn.Module):
     def __init__(self, model):
         super(TextCLIP, self).__init__()
@@ -37,12 +49,89 @@ class ImageCLIP(nn.Module):
     def forward(self, image):
         return self.model.encode_image(image)
 
+def plot_confusion_matrix(y_true, y_pred, classes, name,
+                          normalize=False,
+                          title=None,
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if not title:
+        if normalize:
+            title = 'Normalized confusion matrix'
+        else:
+            title = 'Confusion matrix, without normalization'
+
+    # Compute confusion matrix
+
+    new_pred = []
+    for i, (pred, gt) in enumerate(zip(y_pred, y_true)):
+        if type(pred) == type(list()):
+            if gt in pred:
+                new_pred.append(gt)
+            else:
+                # if not just add the top-1 choice
+                new_pred.append(pred[0])
+        else:
+            new_pred.append(pred)
+
+    y_pred = new_pred
+    cm = confusion_matrix(y_true, y_pred)
+
+    # Only use the labels that appear in the data
+    classes = classes[unique_labels(y_true, y_pred)]
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
+
+    # print(cm)
+
+    with open('confusion.txt', 'w') as f:
+        for el in cm:
+            for np_entry in el:
+                f.write(f'{np_entry},')
+            f.write('\n')
+
+    fig, ax = plt.subplots()
+    im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
+    ax.figure.colorbar(im, ax=ax)
+    # We want to show all ticks...
+    ax.set(xticks=np.arange(cm.shape[1]),
+           yticks=np.arange(cm.shape[0]),
+           # ... and label them with the respective list entries
+           xticklabels=classes, yticklabels=classes,
+           title=title,
+           ylabel='True label',
+           xlabel='Predicted label')
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+             rotation_mode="anchor")
+
+    # Loop over data dimensions and create text annotations.
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, format(cm[i, j], fmt),
+                    ha="center", va="center",
+                    color="white" if cm[i, j] > thresh else "black")
+
+    fig.tight_layout()
+    plt.savefig(f'{name}.png')
+    plt.clf()
+
 def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug):
     model.eval()
     fusion_model.eval()
     num = 0
     corr_1 = 0
     corr_5 = 0
+    labeled_ids = []
+    correct_ids = []
 
     with torch.no_grad():
         text_inputs = classes.to(device)
@@ -60,13 +149,19 @@ def validate(epoch, val_loader, classes, device, model, fusion_model, config, nu
             similarity = similarity.view(b, num_text_aug, -1).softmax(dim=-1)
             similarity = similarity.mean(dim=1, keepdim=False)
             values_1, indices_1 = similarity.topk(1, dim=-1)
-            values_5, indices_5 = similarity.topk(5, dim=-1)
+            values_5, indices_5 = similarity.topk(1, dim=-1)
             num += b
             for i in range(b):
                 if indices_1[i] == class_id[i]:
                     corr_1 += 1
                 if class_id[i] in indices_5[i]:
                     corr_5 += 1
+                
+            # yhat = torch.argmax(similarity_image, dim=1).to(dtype=int)
+            labeled_ids.append(indices_5)
+            correct_ids.extend(class_id.tolist())
+    labeled_ids = torch.cat(labeled_ids).tolist()
+    plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
     top1 = float(corr_1) / num * 100
     top5 = float(corr_5) / num * 100
     wandb.log({"top1": top1})
@@ -83,7 +178,7 @@ def main():
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
-        config = yaml.load(f)
+        config = yaml.safe_load(f)
     working_dir = os.path.join('./exp', config['network']['type'], config['network']['arch'], config['data']['dataset'],
                                args.log_time)
     wandb.init(project=config['network']['type'],
