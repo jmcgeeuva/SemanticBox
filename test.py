@@ -296,21 +296,9 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
     corr3_1 = 0
     corr3_3 = 0
 
-    definitions = [
-        "A book is used or held by teacher or student",
-        "Teacher is sitting (chair, stool, floor, crouching, on desk, kneeling)",
-        "Teacher is standing (in generally the same spot to maintain the same orientation to students)",
-        "Teacher is walking with purpose to change orientation to students",
-        "A tangible object (ruler, math manipulative; anything in someone's hand other than what is already listed; does not include pencil/pen) is used or held by teacher or student for instructional purposes",
-        "A worksheet is used or held by teacher or student"
-    ]
-    use_definitions = config.data.use_definitions
-
     labeled_ids = []
     correct_ids = []
     classes_aug = [v for k, v in text_aug_dict.items()]
-    if use_definitions:
-        classes = concat_and_tokenize(definitions, testing=True)
     similarities_image = []
     similarities_text  = []
     # if print_metrics:
@@ -364,10 +352,10 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
                 #     final_text = concat_and_tokenize(ff_caption, real_texts =class_text, testing=True)
 
                 final_text = final_text.to(device)
-                text_inputs = classes.to(device)
-                
                 ff_en_text_features = clip_model.encode_text(final_text)
-                generic_text_features = clip_model.encode_text(text_inputs)
+            
+            text_inputs = classes.to(device)
+            generic_text_features = clip_model.encode_text(text_inputs)
 
             # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
             b, t, c, h, w = bb_video.size()
@@ -385,6 +373,7 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
             ff_image_features = ff_image_features.view(b,t,-1)
             ff_image_features = fusion_model(ff_image_features)
             
+            print(f'Loss_type is {config.data.loss_type}')
             if config.data.loss_type == 0:
                 if lambda_enbb > 0 and lambda_enff > 0:
                     # ffimg bbimg fftxt bbtxt
@@ -590,12 +579,6 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
                 else:
                     raise ValueError("Error!")
             else:    
-                # if config.data.weighted_features.use:
-                # Fuse
-                # if config.data.weighted_features.learned:
-                #     image_features = lambda_bb.to(dtype=bb_image_features.dtype)*bb_image_features + lambda_ff.to(dtype=ff_image_features.dtype)*ff_image_features
-                #     text_features = lambda_en.to(dtype=bb_image_features.dtype)*ff_en_text_features + lambda_enbb.to(dtype=ff_en_text_features.dtype)*generic_text_features
-                # else:
                 if lambda_ff > 0 and lambda_bb > 0:
                     image_features = lambda_bb*bb_image_features + lambda_ff*ff_image_features
                 elif lambda_ff > 0:
@@ -617,41 +600,19 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
                 if config.data.florence.activate:
                     testing_features = generic_text_features 
                     testing_features /= testing_features.norm(dim=-1, keepdim=True)
-                    # logits_per_text = (100.0 * text_features @ testing_features.T)
-                    # similarity_text = calculate_similarity(logits_per_text, b, num_text_aug) # B x L
                 else:
                     testing_features = ff_en_text_features 
                     testing_features /= testing_features.norm(dim=-1, keepdim=True)
                 # Create Logits
                 logits_per_image = (100.0 * image_features @ testing_features.T)
                 # Decision making
-                # raise ValueError(definitions, use_definitions, image_features.shape, testing_features.shape, logits_per_image.shape, b, num_text_aug)
                 if use_definitions:
                     similarity_image = logits_per_image.view(b, -1).softmax(dim=-1)
                 else:
                     similarity_image = calculate_similarity(logits_per_image, b, num_text_aug) # B x L
-                # similarities_image.append(similarity_image)
-                # similarities_text.append(similarity_text)
-            # else:
-            #     # Normalize
-            #     bb_image_features /= bb_image_features.norm(dim=-1, keepdim=True)
-            #     ff_image_features /= ff_image_features.norm(dim=-1, keepdim=True)
-                
-            #     # Create Logits
-            #     bb_logits_per_image = (100.0 * bb_image_features @ ff_en_text_features.T)
-            #     ff_logits_per_image = (100.0 * ff_image_features @ bb_text_features.T)
-            
-            #     # Decision making
-            #     similarity = calculate_similarity(bb_logits_per_image, b, num_text_aug)
-            #     similarity = similarity + calculate_similarity(ff_logits_per_image, b, num_text_aug)
 
             values_1, indices_1 = similarity_image.topk(1, dim=-1)
             values_k, indices_k = similarity_image.topk(config.data.k, dim=-1)
-            # if config.data.florence.activate:
-            #     values2_1, indices2_1 = similarity_text.topk(1, dim=-1)
-            #     values2_3, indices2_3 = similarity_text.topk(3, dim=-1)
-            #     values3_1, indices3_1 = (similarity_image+.5*similarity_text).topk(1, dim=-1)
-            #     values3_3, indices3_3 = (similarity_image+.5*similarity_text).topk(3, dim=-1)
             num += b
             for i in range(b):
                 if indices_1[i] == class_id[i]:
@@ -659,16 +620,12 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
                 if class_id[i] in indices_k[i]:
                     corr_k += 1
                 
-            # yhat = torch.argmax(similarity_image, dim=1).to(dtype=int)
             labeled_ids.append(indices_k)
             correct_ids.extend(class_id.tolist())
 
     labeled_ids = torch.cat(labeled_ids).tolist()
     if print_metrics:
-        # print('TEXT     Epoch: [{}/{}]: Top1: {}, Top3: {}'.format(epoch, config.solver.epochs, float(corr2_1)/ num * 100, float(corr2_3)/num*100))
-        # print('COMBINED Epoch: [{}/{}]: Top1: {}, Top3: {}'.format(epoch, config.solver.epochs, float(corr3_1)/ num * 100, float(corr3_3)/num*100))
         plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
-        # f.close()
 
     top1 = float(corr_1) / num * 100
     topk = float(corr_k) / num * 100
