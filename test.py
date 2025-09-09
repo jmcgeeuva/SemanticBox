@@ -41,24 +41,6 @@ from florence.florence_attn import *
 import florence.modeling_florence2 as flor2
 from florence.processor import *
 
-def unnormalize(bb, w, h):
-    new_bb = []
-    for b in bb:
-        if b % 2 != 0:
-            new_bb.append(math.ceil(b/1000)*h)
-        else:
-            new_bb.append((b/1000)*w)
-    return new_bb
-
-def normalize(bb, w, h):
-    new_bb = []
-    for b in bb:
-        if b % 2 != 0:
-            new_bb.append(math.ceil((b/h)*1000))
-        else:
-            new_bb.append(math.ceil((b/w)*1000))
-    return new_bb
-
 def plot_confusion_matrix(y_true, y_pred, classes, name,
                           normalize=False,
                           title=None,
@@ -154,136 +136,7 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     similarity = logits_per_image.view(b, num_text_aug, -1).softmax(dim=-1)
     similarity = similarity.mean(dim=1, keepdim=False)
     return similarity
-
-
-def florence_bb(bbs, ff_images, REGION_TO_DESCRIPTION, processor, flo_model, config, device):
-    
-    # [16, 8, 4] = [B, T, C]
-    prompts_r2d = []
-    bbs = bbs[:, 0, :]
-    width = ff_images[0].size[0]
-    height = ff_images[0].size[1]
-    for bb in bbs:
-        norm_bb = normalize(bb.tolist(), width, height)
-    
-        prompt_r2d = f'<{REGION_TO_DESCRIPTION}>'
-        for dim in norm_bb:
-            prompt_r2d += f'<loc_{dim}>'
-        prompts_r2d.append(prompt_r2d)
-    
-    text_dict = {
-        REGION_TO_DESCRIPTION: []
-    }
-
-    # if config.data.weights.lambda_bb > 0 and config.data.weights.lambda_ff > 0:
-    # tasks = [(CAPTION, prompt_cap, False), (REGION_TO_DESCRIPTION, prompts_r2d, True)]
-    # elif config.data.weights.lambda_bb > 0:
-    #     tasks = [(REGION_TO_DESCRIPTION, prompts_r2d, True)]
-    # elif config.data.weights.lambda_bb > 0:
-    #     tasks = [(CAPTION, prompt_cap, False)]
-
-    task, prompt, padding = (REGION_TO_DESCRIPTION, prompts_r2d, True)
-    generated_text = call_florence(prompt, ff_images, flo_model, processor, padding)
-    
-    for this_text, this_prompt in zip(generated_text, prompt):
-        parsed_answer = processor.post_process_generation(
-            this_text,
-            task=this_prompt,
-            image_size=(width, height)
-        )
-        text_dict[task].append(parsed_answer[this_prompt])
-
-    bounded_text = text_dict[REGION_TO_DESCRIPTION]
-    return bounded_text
-
-def call_florence(prompt, cropped_images, model, processor, padding=False):
-    if hasattr(model, 'module'):
-        flo_model = model.module
-    else:
-        flo_model = model
-
-    inputs = processor(text=prompt, images=cropped_images, return_tensors="pt", padding=padding)
-
-    input_ids = inputs["input_ids"].to(flo_model.device)
-    pixel_values = inputs["pixel_values"].to(flo_model.device)
-    generated_ids = flo_model.generate(
-        input_ids=input_ids,
-        pixel_values=pixel_values,
-        max_new_tokens=512,
-        early_stopping=False,
-        do_sample=False,
-        num_beams=3,
-    )
-    generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)
-    return generated_text
-
-def run_region_desc_florence(aug_images, bbs, model, processor, real_texts, config, testing, with_prompt=True):
-    # Just choose one frame to create a caption for
-    if not config.data.florence.random_frame:
-        ff_images = [transforms.ToPILImage()(images[0]) for images in aug_images]
-    else:
-        ff_images = [transforms.ToPILImage()(images[random.randint(0, len(images)-1)]) for images in aug_images]
-    bounded_text = []
-    # Create caption prompts
-    CAPTION = config.data.florence.caption_type
-    prompt_cap = [f'<{CAPTION}>' for _ in ff_images]
-    REGION_TO_DESCRIPTION = 'REGION_TO_DESCRIPTION'
-    bounded_text = florence_bb(
-                            bbs, 
-                            ff_images, 
-                            REGION_TO_DESCRIPTION, 
-                            processor, 
-                            flo_model=model.module, 
-                            config=config, 
-                            device=model.module.device)
-    return concat_and_tokenize(bounded_text, real_texts=real_texts, testing=testing, with_prompt=with_prompt)
-
-def run_caption_florence(aug_images, model, processor, real_texts, config, testing=False, with_prompt=True):
-    # Just choose one frame to create a caption for
-    if not config.data.florence.random_frame:
-        ff_images = [transforms.ToPILImage()(images[0]) for images in aug_images]
-    else:
-        ff_images = [transforms.ToPILImage()(images[random.randint(0, len(images)-1)]) for images in aug_images]
-    # Create caption prompts
-    if config.data.florence.caption_level == 0:
-        CAPTION = 'CAPTION'
-    elif config.data.florence.caption_level == 1:
-        CAPTION = 'DETAILED_CAPTION'
-    elif config.data.florence.caption_level == 2:
-        CAPTION = 'MORE_DETAILED_CAPTION'
-    else:
-        raise ValueError(f'{config.data.florence.caption_level} is an invalid caption_level in the configuration file')
-    prompt_cap = [f'<{CAPTION}>' for _ in ff_images]
-    generated_text = call_florence(prompt_cap, ff_images, model, processor)
-    return concat_and_tokenize(generated_text, real_texts=real_texts, testing=testing, with_prompt=with_prompt)
-
-def run_florence(aug_images, processor, model, real_texts, config, caption=True, bbs=None, label=None, text_input=None, debug=False, testing=False, with_prompt=True):
-
-    ff_texts = None
-    if caption:
-        ff_texts = run_caption_florence(aug_images, model, processor, real_texts, config, testing, with_prompt=with_prompt)
-    else:
-        # FIXME
-        ff_texts = torch.zeros(32, 512)
-        ff_texts = ff_texts.to(device=model.module.device)
-    
-    if bbs != None:
-        bounded_texts = run_region_desc_florence(aug_images, bbs, model, processor, real_texts, config, testing, with_prompt=with_prompt)
-        return ff_texts, bounded_texts
-    else:
-        return ff_texts
-
-def concat_and_tokenize(generated_text, real_texts = None, with_prompt=True, testing=False):
-    if testing or not with_prompt:
-        generated_text = [text.replace('<s>', '').replace('</s>', '') for text in generated_text]
-        final_text = torch.stack([clip.tokenize(text) for text in generated_text])
-        return final_text.squeeze(dim=1)
-    else:
-        generated_text = [prompt_text.capitalize() + ": " + text.replace('<s>', '').replace('</s>', '') for text, prompt_text in zip(generated_text, real_texts)]
-        final_text = torch.stack([clip.tokenize(text) for text in generated_text])
-        return final_text.squeeze(dim=1)
         
-
 def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_model, config, num_text_aug, processor, flo_model, text_aug_dict, lambda_bb, lambda_ff, lambda_enff, lambda_enbb, print_metrics=False):
     clip_model.eval()
     fusion_model.eval()
@@ -301,9 +154,6 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
     classes_aug = [v for k, v in text_aug_dict.items()]
     similarities_image = []
     similarities_text  = []
-    # if print_metrics:
-    #     f = open('similarity.txt', 'w')
-    #     f.write('correct,i_label,t_label,it_label,i_top3,t_top3,it_top3\n')
     with torch.no_grad():
         for iii, data in enumerate(tqdm(val_loader)):
             
@@ -313,51 +163,10 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
             bbs = bbs.to(device)
             nonaug_images = nonaug_images.to(device)
             bb_video = bb_video.view((-1,config.data.num_segments,3)+bb_video.size()[-2:])
-
-            if not config.data.florence.activate:
-                # Original ActionCLIP
-                text_inputs = classes.to(device)
-                ff_en_text_features = clip_model.encode_text(text_inputs)
-            elif config.data.florence.use_bounded_text:
-                # With bounding box text content
-                # if ff_caption == None:
-                caption = False
-                if lambda_enff > 0:
-                    caption = True
-                final_text, bounded_text = run_florence(nonaug_images, processor, flo_model, class_text, config, bbs=bbs, caption=caption, testing=True)
-                # else:
-                #     final_text = concat_and_tokenize(ff_caption, real_texts=class_text, testing=True)
-                #     bounded_text = run_region_desc_florence(nonaug_images, bbs, flo_model, processor, class_text, config, testing=True)
-                
-                final_text = final_text.to(device)
-                bounded_text = bounded_text.to(device)
-                
-                text_inputs = classes.to(device)
-                generic_text_features = clip_model.encode_text(text_inputs)
-                if lambda_enff > 0 and lambda_enbb > 0:
-                    ff_en_text_features = clip_model.encode_text(final_text)
-                    bb_en_text_features = clip_model.encode_text(bounded_text)
-                elif lambda_enff > 0:
-                    ff_en_text_features = clip_model.encode_text(final_text)
-                elif lambda_enbb > 0:
-                    bb_en_text_features = clip_model.encode_text(bounded_text)
-            else:
-                # No bounding box text content
-                # if ff_caption == None:
-                caption = False
-                if lambda_enff > 0:
-                    caption = True
-                final_text = run_florence(nonaug_images, processor, flo_model, class_text, config, caption=caption, testing=True)
-                # else:
-                #     final_text = concat_and_tokenize(ff_caption, real_texts =class_text, testing=True)
-
-                final_text = final_text.to(device)
-                ff_en_text_features = clip_model.encode_text(final_text)
             
             text_inputs = classes.to(device)
             generic_text_features = clip_model.encode_text(text_inputs)
 
-            # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
             b, t, c, h, w = bb_video.size()
             class_id = class_id.to(device)
 
@@ -373,243 +182,21 @@ def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_
             ff_image_features = ff_image_features.view(b,t,-1)
             ff_image_features = fusion_model(ff_image_features)
             
-            print(f'Loss_type is {config.data.loss_type}')
-            if config.data.loss_type == 0:
-                if lambda_enbb > 0 and lambda_enff > 0:
-                    # ffimg bbimg fftxt bbtxt
-                    if lambda_ff > 0 and lambda_bb > 0:
+            if lambda_ff > 0 and lambda_bb > 0:
+                image_features = lambda_bb*bb_image_features + lambda_ff*ff_image_features
+            elif lambda_ff > 0:
+                image_features = lambda_ff*ff_image_features
+            elif lambda_bb > 0:
+                image_features = lambda_bb*bb_image_features
 
-                        # Bounding Box Video and Full frame Video
-                        bb_image_input = bb_video.to(device).view(-1, c, h, w)
-                        bb_image_features = clip_model.encode_image(bb_image_input)
-                        bb_image_features = bb_image_features.view(b,t,-1)
-                        bb_image_features = fusion_model(bb_image_features)
-
-                        ff_video = ff_video.squeeze(dim=1)
-                        ff_image_input = ff_video.to(device).view(-1, c, h, w)
-                        ff_image_features = clip_model.encode_image(ff_image_input)
-                        ff_image_features = ff_image_features.view(b,t,-1)
-                        ff_image_features = fusion_model(ff_image_features)
-
-                        # Normalize
-                        bb_image_features /= bb_image_features.norm(dim=-1, keepdim=True)
-                        ff_image_features /= ff_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        bb_logits_per_image = (100.0 * bb_image_features @ testing_features.T)
-                        ff_logits_per_image = (100.0 * ff_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(bb_logits_per_image, b, num_text_aug)
-                        similarity_image = similarity_image + calculate_similarity(ff_logits_per_image, b, num_text_aug)
-                    # ffimg fftxt bbtxt
-                    elif lambda_ff > 0:
-
-                        ff_video = ff_video.squeeze(dim=1)
-                        ff_image_input = ff_video.to(device).view(-1, c, h, w)
-                        ff_image_features = clip_model.encode_image(ff_image_input)
-                        ff_image_features = ff_image_features.view(b,t,-1)
-                        ff_image_features = fusion_model(ff_image_features)
-
-                        # Normalize
-                        ff_image_features /= ff_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        ff_logits_per_image = (100.0 * ff_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(ff_logits_per_image, b, num_text_aug)
-                        
-                    # bbimg fftxt bbtxt
-                    elif lambda_bb > 0:
-                        # Bounding Box Video and Full frame Video
-                        bb_image_input = bb_video.to(device).view(-1, c, h, w)
-                        bb_image_features = clip_model.encode_image(bb_image_input)
-                        bb_image_features = bb_image_features.view(b,t,-1)
-                        bb_image_features = fusion_model(bb_image_features)
-
-                        # Normalize
-                        bb_image_features /= bb_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        bb_logits_per_image = (100.0 * bb_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(bb_logits_per_image, b, num_text_aug)
-                    else:
-                        raise ValueError("Error!")
-                elif lambda_enff > 0:
-                    # ffimg bbimg fftxt
-                    if lambda_ff > 0 and lambda_bb > 0:
-
-                        ff_video = ff_video.squeeze(dim=1)
-                        ff_image_input = ff_video.to(device).view(-1, c, h, w)
-                        ff_image_features = clip_model.encode_image(ff_image_input)
-                        ff_image_features = ff_image_features.view(b,t,-1)
-                        ff_image_features = fusion_model(ff_image_features)
-
-                        # Normalize
-                        ff_image_features /= ff_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        ff_logits_per_image = (100.0 * ff_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(ff_logits_per_image, b, num_text_aug)
-
-                    # ffimg fftxt
-                    elif lambda_ff > 0:
-
-                        ff_video = ff_video.squeeze(dim=1)
-                        ff_image_input = ff_video.to(device).view(-1, c, h, w)
-                        ff_image_features = clip_model.encode_image(ff_image_input)
-                        ff_image_features = ff_image_features.view(b,t,-1)
-                        ff_image_features = fusion_model(ff_image_features)
-
-                        # Normalize
-                        ff_image_features /= ff_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        ff_logits_per_image = (100.0 * ff_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(ff_logits_per_image, b, num_text_aug)
-
-                    # bbimg fftxt
-                    elif lambda_bb > 0:
-
-                        # Bounding Box Video and Full frame Video
-                        bb_image_input = bb_video.to(device).view(-1, c, h, w)
-                        bb_image_features = clip_model.encode_image(bb_image_input)
-                        bb_image_features = bb_image_features.view(b,t,-1)
-                        bb_image_features = fusion_model(bb_image_features)
-
-                        # Normalize
-                        bb_image_features /= bb_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        bb_logits_per_image = (100.0 * bb_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(bb_logits_per_image, b, num_text_aug)
-                    else:
-                        raise ValueError("Error!")
-                elif lambda_enbb > 0:
-                    # ffimg bbimg bbtxt
-                    if lambda_ff > 0 and lambda_bb > 0:
-
-                        # Bounding Box Video and Full frame Video
-                        bb_image_input = bb_video.to(device).view(-1, c, h, w)
-                        bb_image_features = clip_model.encode_image(bb_image_input)
-                        bb_image_features = bb_image_features.view(b,t,-1)
-                        bb_image_features = fusion_model(bb_image_features)
-
-                        # Normalize
-                        bb_image_features /= bb_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        bb_logits_per_image = (100.0 * bb_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(bb_logits_per_image, b, num_text_aug)
-
-                    # ffimg bbtxt
-                    elif lambda_ff > 0:
-
-                        ff_video = ff_video.squeeze(dim=1)
-                        ff_image_input = ff_video.to(device).view(-1, c, h, w)
-                        ff_image_features = clip_model.encode_image(ff_image_input)
-                        ff_image_features = ff_image_features.view(b,t,-1)
-                        ff_image_features = fusion_model(ff_image_features)
-
-                        # Normalize
-                        ff_image_features /= ff_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        ff_logits_per_image = (100.0 * ff_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(ff_logits_per_image, b, num_text_aug)
-                    # bbimg bbtxt
-                    elif lambda_bb > 0:
-
-                        # Bounding Box Video and Full frame Video
-                        bb_image_input = bb_video.to(device).view(-1, c, h, w)
-                        bb_image_features = clip_model.encode_image(bb_image_input)
-                        bb_image_features = bb_image_features.view(b,t,-1)
-                        bb_image_features = fusion_model(bb_image_features)
-
-                        # Normalize
-                        bb_image_features /= bb_image_features.norm(dim=-1, keepdim=True)
-                        
-                        testing_features = generic_text_features 
-                        testing_features /= testing_features.norm(dim=-1, keepdim=True)
-
-                        # Create Logits
-                        bb_logits_per_image = (100.0 * bb_image_features @ testing_features.T)
-                    
-                        # Decision making
-                        similarity_image = calculate_similarity(bb_logits_per_image, b, num_text_aug)
-                    else:
-                        raise ValueError("Error!")
-                else:
-                    raise ValueError("Error!")
-            else:    
-                if lambda_ff > 0 and lambda_bb > 0:
-                    image_features = lambda_bb*bb_image_features + lambda_ff*ff_image_features
-                elif lambda_ff > 0:
-                    image_features = lambda_ff*ff_image_features
-                elif lambda_bb > 0:
-                    image_features = lambda_bb*bb_image_features
-                
-                if lambda_enff > 0 and lambda_enbb > 0:
-                    text_features = lambda_enff*ff_en_text_features + lambda_enbb*bb_en_text_features
-                elif lambda_enff > 0:
-                    text_features = lambda_enff*ff_en_text_features
-                elif lambda_enbb > 0:
-                    text_features = lambda_enbb*bb_en_text_features
-
-                # Normalize
-                image_features /= image_features.norm(dim=-1, keepdim=True)
-                text_features /= text_features.norm(dim=-1, keepdim=True)
-                
-                if config.data.florence.activate:
-                    testing_features = generic_text_features 
-                    testing_features /= testing_features.norm(dim=-1, keepdim=True)
-                else:
-                    testing_features = ff_en_text_features 
-                    testing_features /= testing_features.norm(dim=-1, keepdim=True)
-                # Create Logits
-                logits_per_image = (100.0 * image_features @ testing_features.T)
-                # Decision making
-                if use_definitions:
-                    similarity_image = logits_per_image.view(b, -1).softmax(dim=-1)
-                else:
-                    similarity_image = calculate_similarity(logits_per_image, b, num_text_aug) # B x L
+            # Normalize
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+            
+            testing_features = generic_text_features 
+            testing_features /= testing_features.norm(dim=-1, keepdim=True)
+            # Create Logits
+            logits_per_image = (100.0 * image_features @ testing_features.T)
+            similarity_image = calculate_similarity(logits_per_image, b, num_text_aug) # B x L
 
             values_1, indices_1 = similarity_image.topk(1, dim=-1)
             values_k, indices_k = similarity_image.topk(config.data.k, dim=-1)
