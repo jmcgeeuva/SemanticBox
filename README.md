@@ -69,7 +69,7 @@ ActionCLIP is written and maintained by [Mengmeng Wang](https://sallymmx.github.
 # Acknowledgments
 This work is funded in part by NSF under 2322993 and 2000487 and by the Gates Foundation
 Views expressed here are those of the authors and do not necessarily reflect positions or policies of Gates the foundation.
-<img width="3145" height="207" alt="image" src="https://github.com/user-attachments/assets/9b0fd657-1b51-4be9-b4b7-7c871e1fb6f5" />
+
 
 
 
