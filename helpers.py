@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 import glob
 import matplotlib.pyplot as plt
-from captum.attr import visualization
+# from captum.attr import visualization
 from torchvision import transforms
 from argparse import Namespace
 import torch
@@ -25,7 +25,7 @@ import argparse
 import math
 from pathlib import Path
 import sys
-from IPython import display
+# from IPython import display
 from base64 import b64encode
 from PIL import Image
 import torch
@@ -36,8 +36,7 @@ from torchvision.transforms import functional as TF
 from tqdm import tqdm
 import kornia.augmentation as K
 import numpy as np
-import imageio
-from IPython.display import display
+# import imageio
 # sys.path.insert(0, "./external/tamingtransformers")
 # sys.path.append("./external/TransformerMMExplainability")
 # import taming.modules

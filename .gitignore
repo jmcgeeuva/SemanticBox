@@ -10,3 +10,10 @@ thumb.sdb
 .idea
 wandb/
 trained_models/
+balanced_frames/
+models/
+images/
+logs/*
+slurm-*out
+**/confusion.txt
+**/generic_test.png

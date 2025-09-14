@@ -1,0 +1,79 @@
+resume: #/sfs/weka/scratch/tkg5kq/sandbox/BoundedCLIP/exp/clip_k400/ViT-B/32/education6/20250317_133011/last_model.pt
+pretrain: 
+test_name: generic_test
+seed: 1737328734
+prompt: './prompts/generic_prompts.txt'
+use_calc_norm: False
+just:
+    image: False
+    text: False
+loss:
+    image: .5
+data:
+    dataset: education6
+    modality: RGB
+    num_segments: 8
+    seg_length: 1
+    batch_size: 32
+    workers: 16
+    num_classes: 6
+    image_tmpl: '{:04d}.jpg'
+    # train_list: './splits/split_reduced/trainnewsplit01.txt'
+    # val_list: './splits/split_reduced/testnewsplit01.txt' #
+    train_list: './splits/split/trainsplit00.txt'
+    val_list: './splits/split/testsplit00.txt' #
+    label_list: './splits/split_reduced/education_6_labels.csv'
+    index_bias: 1
+    input_size: 224
+    florence:
+        activate: True
+        use_bounded_text: False
+        random_frame: False
+        generated_test: False
+    randaug:
+        N: 2 #2
+        M: 9  #9
+    random_shift: True
+    weighted_features: 
+        use: True
+        learned: False
+    weights:
+        # Image weight
+        lambda_ff: .8
+        lambda_bb: .2
+        # Text weight
+        lambda_en: 1
+        # lambda_ge: 1
+        # Florence weight
+        mu: 0
+    label_box: False # if False use teacher
+network:
+    arch: ViT-B/32  #ViT-B/32 ViT-B/16
+    init: True
+    tsm: False
+    drop_out: 0.0 
+    emb_dropout: 0.0 
+    type: clip_k400
+    sim_header: "Transf"  #Transf   meanP  LSTM Conv_1D Transf_cls
+    joint: False
+    describe:
+solver:
+    type: cosine
+    epochs: 50
+    start_epoch: 0
+    epoch_offset: 0
+    optim: adamw
+    lr: 5.e-6
+    lr_warmup_step: 5
+    momentum: 0.9
+    weight_decay: 0.2
+    lr_decay_step: 15
+    lr_decay_factor: 0.1
+    clip_gradient: 20
+    loss_type: nll
+    evaluate: False
+    ratio: 1
+    f_ratio: 10
+logging:
+    print_freq: 10
+    eval_freq: 1

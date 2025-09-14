@@ -5,7 +5,7 @@
 import torch.optim as optim
 from utils.lr_scheduler import WarmupMultiStepLR, WarmupCosineAnnealingLR
 
-def _optimizer(config, model, fusion_model):
+def _optimizer(config, model, fusion_model, lambdas=[]): # lambda_bb=None, lambda_ff=None, lambda_en=None, lambda_ge=None
     if config.solver.optim == 'adam':
         optimizer = optim.Adam([{'params': model.parameters()},  
          {'params': fusion_model.parameters(), 'lr': config.solver.lr * config.solver.f_ratio}],
@@ -25,9 +25,17 @@ def _optimizer(config, model, fusion_model):
         text_params = filter(lambda p: id(p) not in vision_params,
                              model.parameters())
 
+        # if lambdas != []:
+        #     optimizer = optim.AdamW([{'params': text_params},
+        #                             {'params': model.visual.parameters(), 'lr': config.solver.lr * config.solver.ratio},
+        #                             {'params': fusion_model.parameters(), 'lr': config.solver.lr * config.solver.f_ratio},
+        #                             {'params': lambdas, 'lr': 1e-2}],
+        #                             betas=(0.9, 0.98), lr=config.solver.lr, eps=1e-8,
+        #                             weight_decay=config.solver.weight_decay)  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
+        # else:
         optimizer = optim.AdamW([{'params': text_params},
-                                 {'params': model.visual.parameters(), 'lr': config.solver.lr * config.solver.ratio},
-                                 {'params': fusion_model.parameters(), 'lr': config.solver.lr * config.solver.f_ratio}],
+                                {'params': model.visual.parameters(), 'lr': config.solver.lr * config.solver.ratio},
+                                {'params': fusion_model.parameters(), 'lr': config.solver.lr * config.solver.f_ratio}],
                                 betas=(0.9, 0.98), lr=config.solver.lr, eps=1e-8,
                                 weight_decay=config.solver.weight_decay)  # Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
         for param_group in optimizer.param_groups:

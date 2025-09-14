@@ -8,7 +8,7 @@ sys.path.insert(0, "./../explainable_bounding_box/ml-no-token-left-behind/extern
 sys.path.append("./../explainable_bounding_box/ml-no-token-left-behind/external/TransformerMMExplainability/")
 import CLIP.clip as clip
 import torch.nn as nn
-from datasets import Action_DATASETS, Action_DATASETS_orig
+from datasets import EducationBBDataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
@@ -29,7 +29,17 @@ from sklearn.utils.multiclass import unique_labels
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import multilabel_confusion_matrix, accuracy_score
+from torchvision import transforms
 # from TSSTANET.tsstanet import tanet, sanet, stanet, stanet_af
+import os
+import random
+import math
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+from florence.configuration_florence2 import *
+from florence.florence_attn import *
+import florence.modeling_florence2 as flor2
+from florence.processor import *
 
 def plot_confusion_matrix(y_true, y_pred, classes, name,
                           normalize=False,
@@ -46,7 +56,21 @@ def plot_confusion_matrix(y_true, y_pred, classes, name,
             title = 'Confusion matrix, without normalization'
 
     # Compute confusion matrix
+
+    new_pred = []
+    for i, (pred, gt) in enumerate(zip(y_pred, y_true)):
+        if type(pred) == type(list()):
+            if gt in pred:
+                new_pred.append(gt)
+            else:
+                # if not just add the top-1 choice
+                new_pred.append(pred[0])
+        else:
+            new_pred.append(pred)
+
+    y_pred = new_pred
     cm = confusion_matrix(y_true, y_pred)
+
     # Only use the labels that appear in the data
     classes = classes[unique_labels(y_true, y_pred)]
     if normalize:
@@ -56,6 +80,12 @@ def plot_confusion_matrix(y_true, y_pred, classes, name,
         print('Confusion matrix, without normalization')
 
     # print(cm)
+
+    with open('confusion.txt', 'w') as f:
+        for el in cm:
+            for np_entry in el:
+                f.write(f'{np_entry},')
+            f.write('\n')
 
     fig, ax = plt.subplots()
     im = ax.imshow(cm, interpolation='nearest', cmap=cmap)
@@ -106,77 +136,89 @@ def calculate_similarity(logits_per_image, b, num_text_aug):
     similarity = logits_per_image.view(b, num_text_aug, -1).softmax(dim=-1)
     similarity = similarity.mean(dim=1, keepdim=False)
     return similarity
-
-
-def validate(epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug):
-    model.eval()
+        
+def validate(epoch, val_loader, classes, class_text, device, clip_model, fusion_model, config, num_text_aug, processor, flo_model, text_aug_dict, lambda_bb, lambda_ff, lambda_enff, lambda_enbb, print_metrics=False):
+    clip_model.eval()
     fusion_model.eval()
+    flo_model.eval()
     num = 0
     corr_1 = 0
-    corr_5 = 0
+    corr_k = 0
+    corr2_1 = 0
+    corr2_3 = 0
+    corr3_1 = 0
+    corr3_3 = 0
 
     labeled_ids = []
     correct_ids = []
+    classes_aug = [v for k, v in text_aug_dict.items()]
+    similarities_image = []
+    similarities_text  = []
     with torch.no_grad():
-        text_inputs = classes.to(device)
-        text_features = model.encode_text(text_inputs)
         for iii, data in enumerate(tqdm(val_loader)):
-            if len(data) > 3:
-                image, aug_masks, lambdas, class_id = data
-                aug_masks = aug_masks.to(device)
-                lambdas = lambdas.to(device)
-            elif len(data) > 2:
-                image, orig_videos, class_id = data
-                orig_videos = orig_videos.to(device)
-                class_id = class_id.to(device)
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
-            else:
-                image, class_id = data
-                image = image.view((-1,config.data.num_segments,3)+image.size()[-2:])
-
-            # image = image.view((-1, config.data.num_segments, 3) + image.size()[-2:])
-            b, t, c, h, w = image.size()
+            
+            bb_video, ff_video, nonaug_images, bbs, class_id = data
+            ff_video = ff_video.to(device)
             class_id = class_id.to(device)
-            image_input = image.to(device).view(-1, c, h, w)
-            image_features = model.encode_image(image_input)
-            image_features = image_features.view(b,t,-1)
-            image_features = fusion_model(image_features)
+            bbs = bbs.to(device)
+            nonaug_images = nonaug_images.to(device)
+            bb_video = bb_video.view((-1,config.data.num_segments,3)+bb_video.size()[-2:])
+            
+            text_inputs = classes.to(device)
+            generic_text_features = clip_model.encode_text(text_inputs)
+
+            b, t, c, h, w = bb_video.size()
+            class_id = class_id.to(device)
+
+            # Bounding Box Video and Full frame Video
+            bb_image_input = bb_video.to(device).view(-1, c, h, w)
+            bb_image_features = clip_model.encode_image(bb_image_input)
+            bb_image_features = bb_image_features.view(b,t,-1)
+            bb_image_features = fusion_model(bb_image_features)
+
+            ff_video = ff_video.squeeze(dim=1)
+            ff_image_input = ff_video.to(device).view(-1, c, h, w)
+            ff_image_features = clip_model.encode_image(ff_image_input)
+            ff_image_features = ff_image_features.view(b,t,-1)
+            ff_image_features = fusion_model(ff_image_features)
+            
+            if lambda_ff > 0 and lambda_bb > 0:
+                image_features = lambda_bb*bb_image_features + lambda_ff*ff_image_features
+            elif lambda_ff > 0:
+                image_features = lambda_ff*ff_image_features
+            elif lambda_bb > 0:
+                image_features = lambda_bb*bb_image_features
+
+            # Normalize
             image_features /= image_features.norm(dim=-1, keepdim=True)
-            text_features /= text_features.norm(dim=-1, keepdim=True)
-            logits_per_image = (100.0 * image_features @ text_features.T)
-            similarity = calculate_similarity(logits_per_image, b, num_text_aug)
+            
+            testing_features = generic_text_features 
+            testing_features /= testing_features.norm(dim=-1, keepdim=True)
+            # Create Logits
+            logits_per_image = (100.0 * image_features @ testing_features.T)
+            similarity_image = calculate_similarity(logits_per_image, b, num_text_aug) # B x L
 
-            if config.data.use_orig:
-                orig_videos = orig_videos.squeeze(dim=1)
-                image_input = orig_videos.to(device).view(-1, c, h, w)
-                image_features = model.encode_image(image_input)
-                image_features = image_features.view(b,t,-1)
-                image_features = fusion_model(image_features)
-                image_features /= image_features.norm(dim=-1, keepdim=True)
-                text_features /= text_features.norm(dim=-1, keepdim=True)
-                logits_per_image = (100.0 * image_features @ text_features.T)
-                similarity = similarity + calculate_similarity(logits_per_image, b, num_text_aug)
-
-            values_1, indices_1 = similarity.topk(1, dim=-1)
-            values_5, indices_5 = similarity.topk(5, dim=-1)
+            values_1, indices_1 = similarity_image.topk(1, dim=-1)
+            values_k, indices_k = similarity_image.topk(config.data.k, dim=-1)
             num += b
             for i in range(b):
                 if indices_1[i] == class_id[i]:
                     corr_1 += 1
-                if class_id[i] in indices_5[i]:
-                    corr_5 += 1
-    
-            yhat = torch.argmax(similarity, dim=1).to(dtype=int)
-            labeled_ids.extend(yhat.tolist())
+                if class_id[i] in indices_k[i]:
+                    corr_k += 1
+                
+            labeled_ids.append(indices_k)
             correct_ids.extend(class_id.tolist())
 
-    plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
+    labeled_ids = torch.cat(labeled_ids).tolist()
+    if print_metrics:
+        plot_confusion_matrix(correct_ids, labeled_ids, np.array(["Using a Book", "Teacher Sitting", "Teacher Standing", "Teacher Writing", "Using Technology", "Using a Worksheet"]), config.test_name)
 
     top1 = float(corr_1) / num * 100
-    top5 = float(corr_5) / num * 100
+    topk = float(corr_k) / num * 100
     wandb.log({"top1": top1})
-    wandb.log({"top5": top5})
-    print('Epoch: [{}/{}]: Top1: {}, Top5: {}'.format(epoch, config.solver.epochs, top1, top5))
+    wandb.log({"topk": topk})
+    print('Epoch: [{}/{}]: Top1: {}, Top{}: {}'.format(epoch, config.solver.epochs, top1, config.data.k, topk))
     return top1
 
 def main():
@@ -212,82 +254,53 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"  # If using GPU then use mixed precision training.
 
-    model, clip_state_dict = clip.load(config.network.arch, device=device, jit=False, tsm=config.network.tsm,
+    clip_model, clip_state_dict = clip.load(config.network.arch, device=device, jit=False, tsm=config.network.tsm,
                                                    T=config.data.num_segments, dropout=config.network.drop_out,
                                                    emb_dropout=config.network.emb_dropout)  # Must set jit=False for training  ViT-B/32
+    flo_model, processor = flor2.load("BASE_FT", device)
 
     transform_val = get_augmentation(False, config)
 
     fusion_model = visual_prompt(config.network.sim_header, clip_state_dict, config.data.num_segments)
 
-    model_text = TextCLIP(model)
-    model_image = ImageCLIP(model)
+    model_text = TextCLIP(clip_model)
+    model_image = ImageCLIP(clip_model)
 
     model_text = torch.nn.DataParallel(model_text).cuda()
     model_image = torch.nn.DataParallel(model_image).cuda()
     fusion_model = torch.nn.DataParallel(fusion_model).cuda()
-    wandb.watch(model)
+    flo_model = torch.nn.DataParallel(flo_model).cuda()
+    wandb.watch(clip_model)
     wandb.watch(fusion_model)
 
-    if not config.data.use_orig:
-        mask_transform = get_mask_augmentation(cut_size=224, 
-                                            cutn=1, 
-                                            cut_pow=1., 
-                                            noise_fac = 0.1)
-        def collate_fn(batch):
-            videos, masks, lambda_val, labels = zip(*batch)
-            # Check the labels for bb
-            videos, labels = torch.stack(videos), torch.tensor(labels)
-            lambda_val = torch.tensor(lambda_val)
-            masks = torch.stack(masks, dim=0)
-            # videos = videos.view((-1,config.data.num_segments,3)+videos.size()[-2:])
-            # masks = masks.view((-1,config.data.num_segments,3)+masks.size()[-2:])
-            masks = masks.squeeze(dim=1)
-            videos = videos.squeeze(dim=1)
-            data = {'videos': videos, 'masks': masks}
-            iii, aug_masks = mask_transform(data)
-            # iii = iii.squeeze()
-            return videos, aug_masks, lambda_val, labels
+    def collate_fn(batch):
+        cropped_videos, images, bbs, generated_images, ff_caption, labels = zip(*batch)
+        # Check the labels for bb
+        cropped_videos = torch.stack(cropped_videos) 
+        images = torch.stack(images) 
+        labels = torch.tensor(labels)
+        generated_images = torch.stack(generated_images)
+        bbs = torch.stack(bbs)
+        return cropped_videos, images, generated_images, bbs, labels
 
-        val_data = Action_DATASETS(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        image_transform=transform_val)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=False,
-                        drop_last=True,
-                        collate_fn=collate_fn)
-    else:
-        def collate_fn(batch):
-            cropped_videos, images, bbs, labels = zip(*batch)
-            # Check the labels for bb
-            cropped_videos = torch.stack(cropped_videos) 
-            images = torch.stack(images) 
-            labels = torch.tensor(labels)
-            return cropped_videos, images, labels
-
-        val_data = Action_DATASETS_orig(
-                        config.data.val_list,
-                        config.data.label_list, 
-                        random_shift=False,
-                        num_segments=config.data.num_segments,
-                        image_tmpl=config.data.image_tmpl,
-                        transform=transform_val)
-        val_loader = DataLoader(
-                        val_data,
-                        batch_size=config.data.batch_size,
-                        num_workers=config.data.workers,
-                        shuffle=False,
-                        pin_memory=False,
-                        drop_last=True,
-                        collate_fn=collate_fn)
+    transform_val = get_augmentation(False,config)
+    val_data = EducationBBDataset(
+                    config.data.val_list,
+                    config.data.label_list, 
+                    random_shift=False,
+                    num_segments=config.data.num_segments,
+                    image_tmpl=config.data.image_tmpl,
+                    transform=transform_val,
+                    label_box=config.data.label_box,
+                    caption_level=config.data.florence.caption_level)
+    val_loader = DataLoader(
+                    val_data,
+                    batch_size=config.data.batch_size,
+                    num_workers=config.data.workers,
+                    shuffle=False,
+                    pin_memory=False,
+                    drop_last=True,
+                    collate_fn=collate_fn)
 
     if device == "cpu":
         model_text.float()
@@ -303,16 +316,38 @@ def main():
         if os.path.isfile(config.pretrain):
             print(("=> loading checkpoint '{}'".format(config.pretrain)))
             checkpoint = torch.load(config.pretrain)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            clip_model.load_state_dict(checkpoint['model_state_dict'])
             fusion_model.load_state_dict(checkpoint['fusion_model_state_dict'])
             del checkpoint
         else:
             print(("=> no checkpoint found at '{}'".format(config.pretrain)))
 
-    classes, num_text_aug, text_dict = text_prompt(val_data, config.prompt)
+    classes, num_text_aug, text_dict, text_aug_dict, class_text = text_prompt(val_data, config.prompt)
 
     best_prec1 = 0.0
-    prec1 = validate(start_epoch, val_loader, classes, device, model, fusion_model, config, num_text_aug)
+    lambda_bb = config.data.weights.lambda_bb
+    lambda_ff = config.data.weights.lambda_ff
+    lambda_enff = config.data.weights.lambda_enff
+    lambda_enbb = config.data.weights.lambda_enbb
+    prec1 = validate(
+                     start_epoch, 
+                     val_loader, 
+                     classes, 
+                     class_text, 
+                     device, 
+                     clip_model, 
+                     fusion_model, 
+                     config, 
+                     num_text_aug, 
+                     processor, 
+                     flo_model, 
+                     text_aug_dict, 
+                     lambda_bb, 
+                     lambda_ff, 
+                     lambda_enff, 
+                     lambda_enbb,
+                     print_metrics = True
+            )
 
 if __name__ == '__main__':
     main()

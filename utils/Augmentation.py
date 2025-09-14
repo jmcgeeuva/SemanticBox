@@ -31,7 +31,7 @@ import argparse
 import math
 from pathlib import Path
 import sys
-from IPython import display
+# from IPython import display
 from base64 import b64encode
 from PIL import Image
 import torch
@@ -42,7 +42,7 @@ from torchvision.transforms import functional as TF
 from tqdm import tqdm
 import kornia.augmentation as K
 import numpy as np
-import imageio
+# import imageio
 from urllib.request import urlopen
 
 from helpers import *
@@ -67,21 +67,22 @@ def get_mask_augmentation(cut_size, cutn, cut_pow=1., noise_fac = 0.1):
     return torchvision.transforms.Compose([unique])
 
 def get_augmentation(training, config):
-    input_mean=[0.5, 0.5, 0.5]
-    input_std=[0.5, 0.5, 0.5]
+    # input_mean=[0.5, 0.5, 0.5]
+    # input_std=[0.5, 0.5, 0.5]
     # FIXME Change this back: https://github.com/openai/CLIP/issues/20
-    # input_mean = [0.48145466, 0.4578275, 0.40821073]
-    # input_std = [0.26862954, 0.26130258, 0.27577711]
+    input_mean = [0.48145466, 0.4578275, 0.40821073]
+    input_std = [0.26862954, 0.26130258, 0.27577711]
     scale_size = config.data.input_size * 256 // 224
     if training:
         unique = torchvision.transforms.Compose([
                                                  GroupMultiScaleCrop(config.data.input_size, [1, .875, .75, .66]),
                                                  GroupRandomHorizontalFlip(is_sth='some' in config.data.dataset),
-                                                 GroupRandomColorJitter(p=0.8, brightness=0.4, contrast=0.4,
-                                                                        saturation=0.2, hue=0.1),
+                                                #  GroupRandomColorJitter(p=0.8, brightness=0.4, contrast=0.4,
+                                                #                         saturation=0.2, hue=0.1),
                                                  GroupRandomGrayscale(p=0.2),
-                                                 GroupGaussianBlur(p=0),
-                                                 GroupSolarization(p=0)]
+                                                #  GroupGaussianBlur(p=0),
+                                                #  GroupSolarization(p=0)
+                                                 ]
                                                 )
     else:
         unique = torchvision.transforms.Compose([
